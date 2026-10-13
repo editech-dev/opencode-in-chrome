@@ -106,7 +106,8 @@ export function isChromeToHostMsg(x: unknown): x is ChromeToHostMsg {
     case "get_status":
       return true
     case "tool_response":
-      return typeof x["id"] === "string" && isRecord(x["result"])
+      // ok:true carries `result`; ok:false carries `error` — both are valid shapes.
+      return typeof x["id"] === "string" && (isRecord(x["result"]) || isRecord(x["error"]))
     case "notification":
       return typeof x["event"] === "string"
     default:

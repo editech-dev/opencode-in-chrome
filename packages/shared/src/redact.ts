@@ -1,37 +1,42 @@
 /**
- * Secret redaction for tool results (specs/05 invariant #3).
+ * Secret redaction for tool results (specs/05 invariant I3).
  *
- * Anything a model could echo back into a page, a log or a remote MCP client must
- * pass through here. Deliberately conservative: over-redacting a click coordinate
- * is harmless; leaking a password is not.
+ * Line-based and deterministic on purpose: every line with a separator (`:` or
+ * `=`) whose KEY looks sensitive is rewritten to `key: [REDACTED]`, keeping the
+ * key visible for the model. A second pass handles JSON-shaped pairs inline.
+ * Over-redacting a click coordinate is harmless; leaking a password is not.
  */
-
-const SENSITIVE_KEY =
-  /(\b(pass(word|wd)?|pwd|secret|token|api[_-]?key|apikey|auth(orization)?|bearer|credential(s)?|session[_-]?id|cookie)s?\b)/i
-
-const KEY_VALUE_LINE = new RegExp(
-  `([\\r\\n\\t ]*|^)(${SENSITIVE_KEY.source.slice(2, -1)})[\\t ]*[:=][\\t ]*["']?([^"'\\n\\r\\t]{1,4096}?)["']?([\\r\\n,;]|$)`,
-  "gi",
-)
 
 const REDACTED = "[REDACTED]"
 
-/** Redacts `key: value` / `key=value` pairs whose key looks sensitive. */
-export function redactSecrets(text: string): string {
-  if (!text) return text
-  return text.replace(
-    KEY_VALUE_LINE,
-    (_m, lead: string, key: string, _value: string, tail: string) =>
-      `${lead}${key}: ${REDACTED}${tail}`,
-  )
+/** Whole-token key check (used per line, case-insensitive). */
+const KEY_TOKEN =
+  /(?:^|[._\-\s])(pass(?:word|wd)?|pwd|secret|token|api[_-]?key|apikey|auth(?:orization(?:[._-]token)?)?|bearer|credentials?|session[_-]?id|cookie)(?:$|[._\-\s])/i
+
+function redactLine(line: string): string {
+  const sep = /[:=]/.exec(line)
+  if (!sep) return line
+  const key = line.slice(0, sep.index).trim()
+  if (!key || !KEY_TOKEN.test(key)) return line
+  const rest = line.slice(sep.index + 1)
+  if (!rest.trim()) return line // separator without a value: nothing to leak
+  const indent = /^(?:\s*[-*]?\s*)/.exec(line)?.[0] ?? ""
+  return `${indent}${key}: ${REDACTED}`
 }
 
-const KEY_PATH_PAIR = new RegExp(`("${SENSITIVE_KEY.source.slice(2, -1)}")\\s*:\\s*("[^"\\\\\\n\\r]{1,4096}")`, "gi")
+/** Redacts `key: value` / `key = value` pairs whose key looks sensitive. */
+export function redactSecrets(text: string): string {
+  if (!text) return text
+  return text.split("\n").map(redactLine).join("\n")
+}
+
+const JSON_PAIR =
+  /("(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|apikey|auth(?:orization(?:[._-]token)?)?|bearer|credentials?|session[_-]?id|cookie)[\w.\-_]*"\s*:\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/gi
 
 /** Redacts JSON-shaped `"key": "value"` pairs whose key looks sensitive. */
 export function redactJsonSecrets(text: string): string {
   if (!text) return text
-  return text.replace(KEY_PATH_PAIR, `$1: "${REDACTED}"`)
+  return text.replace(JSON_PAIR, `$1"${REDACTED.slice(1, -1)}"`)
 }
 
 /** Convenience: apply both passes. */

@@ -47,15 +47,22 @@ function run(cmd: string, args: string[], timeoutMs = 5_000): Promise<{ code: nu
   })
 }
 
+/** Locates a command's ABSOLUTE path (Chrome spawns hosts with a minimal env —
+ *  a bare `bun` in the wrapper resolves nothing: lesson from the mcp-chrome wrappers). */
+async function locate(cmd: string): Promise<string | null> {
+  const finder = currentPlatform() === "win32" ? "where" : "which"
+  const { code, stdout } = await run(finder, [cmd])
+  if (code !== 0) return null
+  return stdout.trim().split(/\r?\n/)[0] ?? null
+}
+
 /** Prefers bun (plan D3); falls back to node (Node ≥ 23.6 runs TS natively). */
 async function resolveRunner(): Promise<{ cmd: string; fullPath: string }> {
   for (const cmd of ["bun", "node"]) {
-    const { code, stdout } = await run(cmd, ["--version"])
-    if (code === 0) {
-      const lines = stdout.split(/\r?\n/).filter(Boolean)
-      const fullPath = lines[0]?.startsWith("/") ? lines[0] : cmd
-      return { cmd, fullPath }
-    }
+    const p = await locate(cmd)
+    if (!p) continue
+    const v = await run(p, ["--version"])
+    if (v.code === 0) return { cmd, fullPath: p }
   }
   fail("neither bun nor node was found on PATH — install bun ≥1.4: https://bun.com/install")
 }

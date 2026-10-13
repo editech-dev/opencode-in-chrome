@@ -4,118 +4,71 @@
  * Responsibilities:
  *  - own the native messaging port to `com.opencodeinchrome.bridge`
  *    (Chrome spawns the host on connectNative — the user never runs anything);
- *  - keep the SW alive with a ping/latido (MV3 workers idle after ~30 s);
- *  - answer tool_request frames (dispatcher lands in Fase 1 — M1);
+ *  - keep the SW alive with a keepalive alarm (MV3 workers idle after ~30 s);
+ *  - answer tool_request messages (dispatcher lands in Fase 1 — M1);
  *  - broadcast bridge status to the side panel via runtime messages + storage.
  *
- * Protocol: 4-byte UInt32LE length prefix + UTF-8 JSON (see packages/shared).
+ * IMPORTANT (Chrome native messaging): Chrome does the framing for us.
+ *  - port.postMessage(obj) → Chrome serializes + prefixes 4B-LE length → host stdin;
+ *  - host stdout frames → Chrome parses → port.onMessage delivers plain objects.
+ * The bridge side (packages/bridge) does the raw 4B-LE+JSON framing itself — correct.
  */
 
 const HOST_NAME = "com.opencodeinchrome.bridge"
 const PING_PERIOD_MIN = 0.5 // 30 s — below the MV3 idle timeout
 
 let port = null
-let connected = false
 let lastStatus = {
-  type: "disconnected",
+  type: "disconnected", // disconnected | connecting | connected | host_missing
   hostVersion: null,
   mcpClients: 0,
   extensionConnected: false,
 }
 
-// ── Frame codec (browser-side; Buffer is not available in MV3 workers) ───────
-
-class FrameReader {
-  constructor() {
-    this.buf = new Uint8Array(0)
-  }
-
-  /** Feed bytes; returns decoded JSON values. */
-  push(chunk) {
-    const merged = new Uint8Array(this.buf.length + chunk.byteLength)
-    merged.set(this.buf, 0)
-    merged.set(new Uint8Array(chunk), this.buf.length)
-    this.buf = merged
-
-    const out = []
-    for (;;) {
-      if (this.buf.byteLength < 4) break
-      const view = new DataView(this.buf.buffer)
-      const len = view.getUint32(0, true) // little-endian
-      if (len === 0 || len > 64 * 1024 * 1024) throw new Error(`invalid frame length ${len}`)
-      if (this.buf.byteLength < 4 + len) break
-      const body = new TextDecoder().decode(this.buf.subarray(4, 4 + len))
-      this.buf = this.buf.subarray(4 + len)
-      out.push(JSON.parse(body))
-    }
-    return out
-  }
-}
-
-function encodeFrame(value) {
-  const body = new TextEncoder().encode(JSON.stringify(value))
-  const head = new Uint8Array(4)
-  new DataView(head.buffer).setUint32(0, body.byteLength, true)
-  const frame = new Uint8Array(4 + body.byteLength)
-  frame.set(head, 0)
-  frame.set(body, 4)
-  return frame
-}
-
-// ── Status plumbing ──────────────────────────────────────────────────────────
-
 function setStatus(patch) {
   lastStatus = { ...lastStatus, ...patch, updatedAt: new Date().toISOString() }
   chrome.storage.local.set({ bridgeStatus: lastStatus }).catch(() => {})
-  chrome.runtime
-    .sendMessage({ kind: "bridgeStatus", status: lastStatus })
-    .catch(() => {}) // side panel may be closed
+  chrome.runtime.sendMessage({ kind: "bridgeStatus", status: lastStatus }).catch(() => {})
 }
 
 // ── Native messaging port ────────────────────────────────────────────────────
 
 function connectHost() {
+  if (port) return
+  setStatus({ type: "connecting" })
+
   try {
     port = chrome.runtime.connectNative(HOST_NAME)
   } catch (err) {
+    port = null
     setStatus({ type: "host_missing", detail: String(err) })
-    scheduleReconnect()
-    return
+    return // the keepalive alarm retries
   }
 
-  const reader = new FrameReader()
-  port.onMessage.addListener((raw) => {
-    let msgs
-    try {
-      msgs = reader.push(raw)
-    } catch {
-      return
-    }
-    for (const msg of msgs) handleHostMessage(msg)
-  })
+  // Chrome delivers each host message as an already-parsed object.
+  port.onMessage.addListener((msg) => handleHostMessage(msg))
 
   port.onDisconnect.addListener(() => {
-    const err = chrome.runtime.lastError?.message ?? "host exited"
-    connected = false
+    const detail = chrome.runtime.lastError?.message ?? "host exited"
     port = null
-    setStatus({ type: "disconnected", detail: err })
+    setStatus({ type: "disconnected", detail })
     scheduleReconnect()
   })
 
-  connected = true
-  setStatus({ type: "connected", detail: null })
-  port.postMessage(encodeFrame({ type: "ping" }))
-  pingHost()
+  // Handshake: Chrome frames `{type:"ping"}` for us; host replies pong and marks
+  // extensionConnected=true, which is what makes tool calls routable.
+  port.postMessage({ type: "ping" })
+  port.postMessage({ type: "get_status" })
 }
 
 function pingHost() {
-  if (port) port.postMessage(encodeFrame({ type: "ping" }))
+  if (port) port.postMessage({ type: "ping" })
 }
 
 function handleHostMessage(msg) {
   switch (msg?.type) {
     case "pong":
-      setStatus({ type: "connected", hostVersion: msg.nativeHostVersion ?? lastStatus.hostVersion })
+      setStatus({ type: "connected" })
       break
     case "status_response":
       setStatus({
@@ -127,18 +80,16 @@ function handleHostMessage(msg) {
       break
     case "mcp_connected":
     case "mcp_disconnected":
-      pingHost() // refresh mcpClients count on the next status
+      if (port) port.postMessage({ type: "get_status" }) // refresh mcpClients count
       break
     case "tool_request":
       // Fase 1 (M1) implements the dispatcher; answer deterministically meanwhile.
-      port?.postMessage(
-        encodeFrame({
-          type: "tool_response",
-          id: msg.id,
-          ok: false,
-          error: { message: "browser tools land in Fase 1 (M1) — connection is healthy" },
-        }),
-      )
+      port?.postMessage({
+        type: "tool_response",
+        id: msg.id,
+        ok: false,
+        error: { message: "browser tools land in Fase 1 (M1) — connection is healthy" },
+      })
       break
     case "notification":
       chrome.notifications?.create({
@@ -157,20 +108,17 @@ function handleHostMessage(msg) {
 let reconnectAttempts = 0
 
 function scheduleReconnect() {
+  // setTimeout does not survive SW suspension — treat it as best-effort; the
+  // keepalive alarm is the durable retry path.
   const delay = Math.min(30_000, 500 * 2 ** reconnectAttempts++)
-  setTimeout(() => {
-    if (!port) connectHost()
-  }, delay)
+  setTimeout(() => connectHost(), delay)
 }
 
 chrome.alarms.create("keepalive", { periodInMinutes: PING_PERIOD_MIN })
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== "keepalive") return
-  if (port) {
-    pingHost()
-  } else {
-    connectHost()
-  }
+  connectHost() // no-ops if the port is alive; respawns the host otherwise
+  pingHost()
 })
 
 // ── Side panel messaging ─────────────────────────────────────────────────────
@@ -179,15 +127,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.kind === "getStatus") {
     sendResponse(lastStatus)
   }
-  return false // no async response
+  return false
 })
 
-chrome.sidePanel
-  .setPanelBehavior({ openPanelOnActionClick: true })
-  .catch(() => {}) // older Chromium builds
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {})
 
 chrome.runtime.onInstalled.addListener(() => connectHost())
 chrome.runtime.onStartup.addListener(() => connectHost())
 
-// SW may be revived without install/startup events — try immediately.
-if (!port) connectHost()
+// The SW may be revived without install/startup events (alarm, message) — the
+// top-level run is itself a wake: connect immediately.
+connectHost()

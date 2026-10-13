@@ -9,6 +9,9 @@ function render(status) {
     case "connected":
       state.innerHTML = `${dot("ok")} connected`
       break
+    case "connecting":
+      state.innerHTML = `${dot("warn")} connecting…`
+      break
     case "host_missing":
       state.innerHTML = `${dot("bad")} host not installed`
       break
@@ -29,4 +32,8 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg?.kind === "bridgeStatus") render(msg.status)
 })
 el("refresh").addEventListener("click", refresh)
+
+// While the panel is open, poll the SW every 5 s: each message resets the MV3
+// idle timer, keeping the SW (and with it the native host) alive during use.
+setInterval(refresh, 5_000)
 refresh()

@@ -74,6 +74,45 @@ function startHost(): {
   return { send, read, stderr: "" }
 }
 
+/** Opens a socket-client connection with id-matched response queue (MCP client stand-in). */
+function openClient(socketPath: string): {
+  id: string
+  write: (buf: Buffer) => void
+  read: () => Promise<unknown>
+  destroy: () => void
+} {
+  const id = `test${Date.now() % 1000}`
+  const socket = connect(socketPath)
+  const reader = new FrameReader()
+  const queue: { id?: string }[] = []
+  let notify: (() => void) | null = null
+  socket.on("data", (d: Buffer) => {
+    for (const f of reader.push(d)) {
+      queue.push(f as { id?: string })
+      notify?.()
+    }
+  })
+  return {
+    id,
+    write: (buf: Buffer) => socket.write(buf),
+    read: () =>
+      new Promise<unknown>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("timeout on socket client")), 10_000)
+        const pump = () => {
+          const next = queue.shift()
+          if (next !== undefined) {
+            clearTimeout(timer)
+            resolve(next)
+            return
+          }
+          notify = pump
+        }
+        pump()
+      }),
+    destroy: () => socket.destroy(),
+  }
+}
+
 describe("native host handshake (Chrome protocol)", () => {
   test("ping → pong", async () => {
     const h = startHost()
@@ -106,40 +145,47 @@ describe("native host handshake (Chrome protocol)", () => {
     const status = (await h.read()) as { socketPath?: string }
     const socketPath = status.socketPath
 
-    const client = connect(socketPath!)
-    const clientReader = new FrameReader()
-
-    const clientQueue: unknown[] = []
-    let clientNotify: (() => void) | null = null
-    client.on("data", (d: Buffer) => {
-      for (const frame of clientReader.push(d)) {
-        clientQueue.push(frame)
-        clientNotify?.()
-      }
-    })
-    const clientRead = () =>
-      new Promise<unknown>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("timeout on socket client")), 10_000)
-        const pump = () => {
-          const next = clientQueue.shift()
-          if (next !== undefined) {
-            clearTimeout(timer)
-            resolve(next)
-            return
-          }
-          clientNotify = pump
-        }
-        pump()
-      })
+    const client = openClient(socketPath!)
 
     // Client sends a tool_request; the extension has NOT performed its handshake
     // (no ping in this test), so the host must answer a typed error bound to our
     // correlation id (multiplexing contract) instead of forwarding to a dead pipe.
     client.write(encodeFrame({ type: "tool_request", id: "req-1", tool: "tabs_context", args: {}, clientId: "test" }))
-    const resp = (await clientRead()) as { type?: string; id?: string; ok?: boolean }
+    const resp = (await client.read()) as { type?: string; id?: string; ok?: boolean }
     expect(resp.type).toBe("tool_response")
     expect(resp.id).toBe("req-1") // direct error echoes the client's own correlation id
     expect(resp.ok).toBe(false)
+    client.destroy()
+  }, 15_000)
+
+  test("extension-sourced ERROR tool_response routes back un-namespaced (regression: guard dropped error responses)", async () => {
+    const h = startHost()
+    h.send({ type: "ping" }) // extension handshake → extensionConnected = true
+    await h.read() // pong (mark connected)
+
+    h.send({ type: "get_status" })
+    const status = (await h.read()) as { socketPath?: string; extensionConnected?: boolean }
+    expect(status.extensionConnected).toBe(true)
+
+    const client = openClient(status.socketPath!)
+    // Send an error-shaped tool_response AS IF it came from the extension.
+    // NOTE: the host namespaces client ids as "cli<N>" (first client = cli0).
+    h.send({
+      type: "tool_response",
+      id: `cli0:err-42`,
+      ok: false,
+      error: { message: "foreign tab" },
+    })
+    const resp = (await client.read()) as {
+      type?: string
+      id?: string
+      ok?: boolean
+      error?: { message?: string }
+    }
+    expect(resp.type).toBe("tool_response")
+    expect(resp.id).toBe("err-42")
+    expect(resp.ok).toBe(false)
+    expect(resp.error?.message).toBe("foreign tab")
     client.destroy()
   }, 15_000)
 })

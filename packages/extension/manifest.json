@@ -3,7 +3,7 @@
   "name": "OpenCode in Chrome",
   "version": "0.0.1",
   "description": "Your local OpenCode agent inside Chrome — chat in the side panel, browser tools over MCP.",
-  "permissions": ["nativeMessaging", "sidePanel", "storage", "alarms"],
+  "permissions": ["nativeMessaging", "sidePanel", "storage", "alarms", "tabs", "tabGroups"],
   "side_panel": {
     "default_path": "sidepanel.html"
   },

@@ -1,0 +1,8 @@
+{
+  "name": "@opencode-in-chrome/extension",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Chrome MV3 extension: OpenCode chat side panel + browser tool dispatcher.",
+  "license": "MIT",
+  "trustedDependencies": []
+}

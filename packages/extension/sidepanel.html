@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenCode</title>
+    <style>
+      :root {
+        --bg: #0d1117;
+        --panel: #161b22;
+        --border: #30363d;
+        --text: #e6edf3;
+        --muted: #8b949e;
+        --accent: #f78166;
+        --ok: #3fb950;
+        --warn: #d29922;
+        --bad: #f85149;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 13px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        padding: 12px;
+      }
+      header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+      header h1 { font-size: 15px; margin: 0; letter-spacing: 0.2px; }
+      header .ver { color: var(--muted); font-size: 11px; }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin-bottom: 10px;
+      }
+      .row { display: flex; justify-content: space-between; align-items: center; padding: 2px 0; }
+      .k { color: var(--muted); }
+      .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+      .dot.ok { background: var(--ok); }
+      .dot.warn { background: var(--warn); }
+      .dot.bad { background: var(--bad); }
+      .chat-hint { color: var(--muted); text-align: center; padding: 28px 6px; }
+      .chat-hint b { color: var(--accent); }
+      .next { color: var(--muted); font-size: 12px; }
+      button {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 6px;
+        padding: 4px 10px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      button:hover { border-color: var(--accent); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>OpenCode</h1>
+      <span class="ver" id="version">v0.0.1</span>
+      <span style="flex: 1"></span>
+      <button id="refresh">↻</button>
+    </header>
+
+    <div class="card">
+      <div class="row">
+        <span class="k">Bridge (native host)</span>
+        <span id="bridge-state"><span class="dot warn"></span>…</span>
+      </div>
+      <div class="row">
+        <span class="k">Host version</span>
+        <span id="host-version">—</span>
+      </div>
+      <div class="row">
+        <span class="k">MCP clients</span>
+        <span id="mcp-clients">—</span>
+      </div>
+    </div>
+
+    <div class="card chat-hint">
+      <b>OpenCode chat</b><br />
+      lands in Fase 3 (M3) — this panel will host your local OpenCode sessions,
+      shared with the CLI.
+    </div>
+
+    <div class="card next">
+      <b>Next:</b> M1 browser tools (tabs, navigate, computer, read_page…) ·
+      M2 <code>opencode mcp add oc-chrome</code> · M3 side-panel chat.
+    </div>
+
+    <script src="sidepanel.js"></script>
+  </body>
+</html>

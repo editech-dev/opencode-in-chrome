@@ -1,0 +1,17 @@
+{
+  "name": "oc-chrome-bridge",
+  "version": "0.0.1",
+  "description": "Native messaging host + MCP server that connects OpenCode to your Chrome.",
+  "license": "MIT",
+  "type": "module",
+  "trustedDependencies": [],
+  "bin": {
+    "oc-chrome-bridge": "./src/cli.ts"
+  },
+  "dependencies": {
+    "@opencode-in-chrome/shared": "workspace:*"
+  },
+  "files": [
+    "src"
+  ]
+}

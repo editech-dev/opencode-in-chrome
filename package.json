@@ -1,0 +1,22 @@
+{
+  "name": "opencode-in-chrome",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Your local OpenCode agent, living inside Chrome — side-panel chat + browser tools over MCP.",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "bun check",
+    "check:dep-age": "bun scripts/check-dep-age.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.3"
+  }
+}

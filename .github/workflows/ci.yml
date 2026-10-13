@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.3"
+
+      - name: Install (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck (bun check)
+        run: bun run typecheck
+
+      - name: Unit tests (includes native-host 3-OS gate)
+        run: bun test
+
+      - name: Dependency age gate (>= 24h)
+        run: bun run check:dep-age
+
+      - name: Security audit
+        run: bun audit
+        continue-on-error: true # non-blocking during Fase 0; make blocking at Fase 1
+
+      - name: Assert lockfile stayed frozen
+        run: |
+          if [ -n "$(git status --porcelain bun.lock)" ]; then
+            echo "::error::bun.lock changed during install — commit the updated lockfile or fix the manifest"
+            exit 1
+          fi

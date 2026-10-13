@@ -1,0 +1,56 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "opencode-in-chrome",
+      "devDependencies": {
+        "@types/bun": "1.4.3",
+      },
+    },
+    "packages/bridge": {
+      "name": "oc-chrome-bridge",
+      "version": "0.0.1",
+      "bin": {
+        "oc-chrome-bridge": "./src/cli.ts",
+      },
+      "dependencies": {
+        "@opencode-in-chrome/shared": "workspace:*",
+      },
+    },
+    "packages/core": {
+      "name": "@opencode-in-chrome/core",
+      "version": "0.0.1",
+      "dependencies": {
+        "@opencode-in-chrome/shared": "workspace:*",
+      },
+    },
+    "packages/extension": {
+      "name": "@opencode-in-chrome/extension",
+      "version": "0.0.1",
+    },
+    "packages/shared": {
+      "name": "@opencode-in-chrome/shared",
+      "version": "0.0.1",
+    },
+  },
+  "packages": {
+    "@opencode-in-chrome/core": ["@opencode-in-chrome/core@workspace:packages/core"],
+
+    "@opencode-in-chrome/extension": ["@opencode-in-chrome/extension@workspace:packages/extension"],
+
+    "@opencode-in-chrome/shared": ["@opencode-in-chrome/shared@workspace:packages/shared"],
+
+    "@types/bun": ["@types/bun@1.4.3", "", { "dependencies": { "bun-types": "1.4.3" } }, "sha512-N67Pqy8JXbAY/j0tNraS3V5mubGvc6rrrNDmDCtZLlFzccbUJPDb0tvgUBC5q4m8ybkP93Jcn1QB+RYQ6PvBhw=="],
+
+    "@types/node": ["@types/node@26.6.5", "", { "dependencies": { "undici-types": "~8.9.0" } }, "sha512-uMzsv9stDdofIZBx4UGh4Z9ZgXnGC9seRDscilBcTHAeOFk67MZg/k9bWVfO+bk4qZmG+l52hRnLwUiH2LnJTg=="],
+
+    "bun-types": ["bun-types@1.4.3", "", { "dependencies": { "@types/node": "*", "undici-types": "*" } }, "sha512-tinRJNGOmUN+tEAsn2y2e942n9JHRHR42iUYzDH75NmhJqVBokGSQkkfSFdNWwsANIdrK6ACH9t01M452YyTwg=="],
+
+    "oc-chrome-bridge": ["oc-chrome-bridge@workspace:packages/bridge"],
+
+    "undici-types": ["undici-types@8.11.2", "", {}, "sha512-iMVNmWZ0leK/goS6eXMizSzmm9CDWtyphwbaCms3DNLqRxDL+mMoNVcZMTyyVgXP0N+Z8neAMzDoUOUJL8veKg=="],
+
+    "@types/node/undici-types": ["undici-types@8.9.0", "", {}, "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg=="],
+  }
+}

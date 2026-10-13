@@ -1,0 +1,12 @@
+{
+  "name": "@opencode-in-chrome/shared",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Wire protocol, types and redaction utilities shared by extension, bridge and core tools.",
+  "license": "MIT",
+  "type": "module",
+  "trustedDependencies": [],
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

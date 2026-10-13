@@ -1,0 +1,229 @@
+/**
+ * oc-chrome-bridge CLI — one-time installer (decision D10).
+ *
+ *   oc-chrome-bridge install [--ext-id <chrome-extension-id>]
+ *   oc-chrome-bridge uninstall
+ *   oc-chrome-bridge status
+ *   oc-chrome-bridge doctor
+ *
+ * `install` writes the NativeMessagingHosts manifest for every Chromium-family
+ * browser profile found on the platform, registering the wrapper that Chrome will
+ * spawn. After install, Chrome spawns the host automatically — zero scripts per use.
+ */
+
+import { execFile } from "node:child_process"
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises"
+import { homedir } from "node:os"
+import { join, dirname } from "node:path"
+import { connect } from "node:net"
+import { fileURLToPath } from "node:url"
+import {
+  HOST_NAME,
+  bridgeConfigDir,
+  bridgeDir,
+  currentPlatform,
+  encodeFrame,
+  socketPathForPid,
+} from "@opencode-in-chrome/shared"
+
+const VERSION = "0.0.1"
+const HERE = dirname(fileURLToPath(import.meta.url))
+const HOST_TS = join(HERE, "native-host", "host.ts")
+
+function out(msg: string): void {
+  console.log(msg)
+}
+
+function fail(msg: string): never {
+  console.error(`✗ ${msg}`)
+  process.exit(1)
+}
+
+function run(cmd: string, args: string[], timeoutMs = 5_000): Promise<{ code: number; stdout: string }> {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { timeout: timeoutMs }, (err, stdout) =>
+      resolve({ code: err ? (typeof err.code === "number" ? err.code : 1) : 0, stdout: stdout ?? "" }),
+    )
+  })
+}
+
+/** Prefers bun (plan D3); falls back to node (Node ≥ 23.6 runs TS natively). */
+async function resolveRunner(): Promise<{ cmd: string; fullPath: string }> {
+  for (const cmd of ["bun", "node"]) {
+    const { code, stdout } = await run(cmd, ["--version"])
+    if (code === 0) {
+      const lines = stdout.split(/\r?\n/).filter(Boolean)
+      const fullPath = lines[0]?.startsWith("/") ? lines[0] : cmd
+      return { cmd, fullPath }
+    }
+  }
+  fail("neither bun nor node was found on PATH — install bun ≥1.4: https://bun.com/install")
+}
+
+function manifestTargets(plat: ReturnType<typeof currentPlatform>): { browser: string; file: string }[] {
+  const h = homedir()
+  const name = `${HOST_NAME}.json`
+  if (plat === "win32") {
+    return [{ browser: "chrome", file: join(bridgeConfigDir(), name) }]
+  }
+  if (plat === "darwin") {
+    const base = join(h, "Library", "Application Support")
+    return [
+      { browser: "chrome", file: join(base, "Google", "Chrome", "NativeMessagingHosts", name) },
+      { browser: "chromium", file: join(base, "Chromium", "NativeMessagingHosts", name) },
+      { browser: "brave", file: join(base, "BraveSoftware", "Brave-Browser", "NativeMessagingHosts", name) },
+      { browser: "edge", file: join(base, "Microsoft Edge", "NativeMessagingHosts", name) },
+    ]
+  }
+  const cfg = process.env["XDG_CONFIG_HOME"] ?? join(h, ".config")
+  return [
+    { browser: "chrome", file: join(cfg, "google-chrome", "NativeMessagingHosts", name) },
+    { browser: "chromium", file: join(cfg, "chromium", "NativeMessagingHosts", name) },
+    { browser: "brave", file: join(cfg, "BraveSoftware", "Brave-Browser", "NativeMessagingHosts", name) },
+  ]
+}
+
+async function writeManifest(file: string, hostPath: string, allowedOrigins: string[]): Promise<void> {
+  await mkdir(dirname(file), { recursive: true })
+  await writeFile(
+    file,
+    JSON.stringify(
+      {
+        name: HOST_NAME,
+        description: "OpenCode in Chrome — native messaging host",
+        path: hostPath,
+        type: "stdio",
+        allowed_origins: allowedOrigins,
+      },
+      null,
+      2,
+    ) + "\n",
+  )
+}
+
+async function cmdInstall(argv: string[]): Promise<void> {
+  const extIdx = argv.indexOf("--ext-id")
+  let extId = extIdx >= 0 && argv[extIdx + 1] ? argv[extIdx + 1] : undefined
+  const plat = currentPlatform()
+
+  // Saved extension id from a previous pairing (Fase 3 makes this automatic).
+  if (!extId) {
+    extId = (await readFile(join(bridgeConfigDir(), "ext-id"), "utf8").catch(() => "")).trim() || undefined
+  }
+  if (!extId) {
+    fail(
+      "missing --ext-id. Load the unpacked extension (packages/extension), copy its ID from " +
+        "chrome://extensions, then run: oc-chrome-bridge install --ext-id <id>",
+    )
+  }
+  await mkdir(bridgeConfigDir(), { recursive: true })
+  await writeFile(join(bridgeConfigDir(), "ext-id"), `${extId}\n`)
+  const allowedOrigins = [`chrome-extension://${extId}/`]
+
+  const runner = await resolveRunner()
+  const hostDir = join(bridgeConfigDir(), "host")
+
+  if (plat === "win32") {
+    // Chrome spawns via cmd.exe: a .bat wrapper calling the runner directly.
+    const hostBin = join(hostDir, "host.cmd")
+    await mkdir(hostDir, { recursive: true })
+    await writeFile(hostBin, `@echo off\r\n"${runner.fullPath}" run "${HOST_TS}"\r\n`, { mode: 0o755 })
+    out(`  ✓ wrapper: ${hostBin}`)
+    const manifestFile = manifestTargets(plat)[0]!.file
+    await writeManifest(manifestFile, hostBin, allowedOrigins)
+    out(`  ✓ chrome manifest: ${manifestFile}`)
+    const { code } = await run("reg", [
+      "add", `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}`,
+      "/ve", "/d", manifestFile, "/f",
+    ])
+    if (code !== 0) fail("could not write the Windows registry key (HKCU)")
+    out(`  ✓ registry: HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}`)
+  } else {
+    const hostBin = join(hostDir, "host.sh")
+    await mkdir(hostDir, { recursive: true })
+    await writeFile(hostBin, `#!/bin/sh\nexec "${runner.fullPath}" run "${HOST_TS}"\n`, { mode: 0o755 })
+    out(`  ✓ wrapper: ${hostBin}`)
+    for (const { browser, file } of manifestTargets(plat)) {
+      await writeManifest(file, hostBin, allowedOrigins)
+      out(`  ✓ ${browser} manifest: ${file}`)
+    }
+  }
+
+  out("")
+  out("✓ installed. Restart Chrome and open the extension — Chrome will spawn the host automatically.")
+  out(`  runner: ${runner.cmd} → ${HOST_TS}`)
+  out(`  sockets live in: ${bridgeDir()} (named bridge-<pid>.${currentPlatform() === "win32" ? "pipe" : "sock"})`)
+}
+
+async function cmdUninstall(): Promise<void> {
+  for (const { file } of manifestTargets(currentPlatform())) {
+    await rm(file, { force: true })
+  }
+  if (currentPlatform() === "win32") {
+    await run("reg", ["delete", `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}`, "/f"])
+  }
+  out("✓ manifests removed (Chrome picks it up on restart)")
+}
+
+async function cmdStatus(): Promise<void> {
+  out(`platform:    ${currentPlatform()}`)
+  out(`host entry:  ${HOST_TS}`)
+  for (const { browser, file } of manifestTargets(currentPlatform())) {
+    const present = await access(file).then(() => true, () => false)
+    out(`manifest ${browser.padEnd(8)}: ${present ? "✓ installed" : "— not installed"}`)
+  }
+  const extId = (await readFile(join(bridgeConfigDir(), "ext-id"), "utf8").catch(() => "")).trim()
+  out(`extension:   ${extId ? `paired (${extId})` : "not paired yet"}`)
+  out(`bridge dir:  ${bridgeDir()}`)
+}
+
+/** doctor — probes known socket files for a live host (the M0 smoke check, by hand). */
+async function cmdDoctor(): Promise<void> {
+  const dir = bridgeDir()
+  if (currentPlatform() === "win32") {
+    out("doctor: Windows named pipes cannot be listed portably from userspace; run `status` + use the extension.")
+    return
+  }
+  const { readdir } = await import("node:fs/promises")
+  const entries = await readdir(dir).catch(() => [])
+  const sockets = entries.filter((n) => /^bridge-\d+\.sock$/.test(n))
+  out(`bridge dir: ${dir} (${sockets.length} socket(s))`)
+  let alive = 0
+  for (const s of sockets) {
+    const responded = await new Promise<boolean>((resolve) => {
+      const c = connect(join(dir, s), () => c.write(encodeFrame({ type: "ping" })))
+      c.setTimeout(2_000)
+      c.on("data", () => {
+        resolve(true)
+        c.destroy()
+      })
+      c.on("timeout", () => {
+        c.destroy()
+        resolve(false)
+      })
+      c.on("error", () => resolve(false))
+    })
+    if (responded) alive++
+    out(`  ${s}: ${responded ? "✓ alive (pong)" : "dead"}`)
+  }
+  out(alive > 0 ? "✓ live bridge found — the extension can connect" : "— no live bridge; open Chrome with the extension to spawn one")
+}
+
+const [, , command, ...argv] = process.argv
+const commands: Record<string, (argv: string[]) => Promise<void>> = {
+  install: cmdInstall,
+  uninstall: cmdUninstall,
+  status: cmdStatus,
+  doctor: cmdDoctor,
+}
+
+if (!command || command === "--help" || command === "help") {
+  out(`oc-chrome-bridge ${VERSION} — connects OpenCode to your Chrome`)
+  out("usage: oc-chrome-bridge <install|uninstall|status|doctor> [--ext-id <extension-id>]")
+} else if (command === "--version" || command === "version") {
+  out(`oc-chrome-bridge ${VERSION}`)
+} else if (commands[command]) {
+  commands[command]!(argv).catch((err: Error) => fail(err.message))
+} else {
+  fail(`unknown command "${command}" — try install | uninstall | status | doctor`)
+}

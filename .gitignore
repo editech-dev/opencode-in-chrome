@@ -1,0 +1,33 @@
+# ─── Builds y artefactos ─────────────────────────────────────────
+node_modules/
+dist/
+.wxt/
+.output/
+coverage/
+*.zip
+*.tgz
+
+# ─── POLÍTICA DEL USUARIO: todo lo que NO es código del producto queda FUERA de git ───
+# SDD / specs / decisiones (trabajo interno, local)
+specs/
+design/
+docs/
+
+# Arnés (harness) de pruebas e2e y artefactos de testing
+infra/e2e/
+test-results/
+
+# Políticas y andamiaje de IA / agentes (local, personal)
+.opencode/
+opencode.jsonc
+opencode.json
+CLAUDE.md
+AGENTS.md
+
+# ─── Secretos y estado local ────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+Thumbs.db

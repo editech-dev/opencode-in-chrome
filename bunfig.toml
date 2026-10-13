@@ -1,0 +1,13 @@
+# Bun configuration — opencode-in-chrome
+# Supply-chain policy (decision D4): no lifecycle scripts are ever executed for
+# dependencies. Bun is default-secure; with trustedDependencies: [] in every
+# package.json the built-in allowlist is opted out entirely.
+# If a package truly needs a postinstall, justify it in specs/adr/ and add it to
+# THAT package's trustedDependencies after review.
+
+[install]
+exact = true
+
+[install.lockfile]
+# Text lockfile (bun.lock, v2) — readable, reviewable in PRs.
+save = true

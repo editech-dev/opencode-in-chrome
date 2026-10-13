@@ -1,0 +1,23 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Dependency policy (D4): never propose a version younger than 24 hours.",
+  "extends": ["config:recommended"],
+  "minimumReleaseAge": "1 day",
+  "timezone": "America/Bogota",
+  "schedule": ["before 6am on monday"],
+  "vulnerabilityAlerts": {
+    "enabled": true
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on monday"]
+  },
+  "packageRules": [
+    {
+      "description": "Group runtime deps for the bridge so upgrades are reviewed as one unit",
+      "matchManagers": ["bun"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "bun minor+patch"
+    }
+  ]
+}

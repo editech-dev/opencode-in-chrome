@@ -14,7 +14,7 @@
  */
 
 import { createServer, connect, type Server, type Socket } from "node:net"
-import { chmod, mkdir, readdir, rm } from "node:fs/promises"
+import { appendFile, chmod, mkdir, readdir, rm } from "node:fs/promises"
 import { stdin, stdout, pid } from "node:process"
 import {
   FrameReader,
@@ -35,6 +35,17 @@ export const NATIVE_HOST_VERSION = PROTOCOL_VERSION + ".0"
 
 function log(msg: string): void {
   process.stderr.write(`[oc-chrome-host ${pid}] ${msg}\n`)
+}
+
+// Structured relay trace, opt-in via OCIC_TRACE=<file> — debug aid for
+// multiplexing issues; zero cost when unset.
+const TRACE = process.env["OCIC_TRACE"] ?? ""
+let traceSeq = 0
+function trace(msg: string, extra?: unknown): void {
+  if (!TRACE) return
+  void appendFile(TRACE, `${++traceSeq}\t${Date.now()}\t${msg}${extra === undefined ? "" : `\t${JSON.stringify(extra)}`}\n`).catch(
+    () => {},
+  )
 }
 
 type SocketClient = {
@@ -63,7 +74,18 @@ export class NativeHost {
     stdin.on("error", () => this.stop("stdin error"))
     stdin.resume()
     log(`listening on ${this.socketPath} (host: ${currentPlatform()})`)
+    // Heartbeat toward the extension while any MCP client is connected: the MV3
+    // service worker freezes ~30 s without events (Chrome throttles alarms to
+    // ≥1 min), which silently ate in-flight tool_requests. A port message每 25 s
+    // resets the SW idle timer exactly while a session exists.
+    this.heartbeat = setInterval(() => {
+      if (!this.extensionConnected || this.clients.size === 0) return
+      trace("heartbeat → chrome", { clients: this.clients.size })
+      this.sendToChrome({ type: "notification", event: "keepalive" })
+    }, 25_000)
   }
+
+  private heartbeat: ReturnType<typeof setInterval> | null = null
 
   private async listen(): Promise<void> {
     const dir = bridgeDir()
@@ -116,6 +138,7 @@ export class NativeHost {
   }
 
   private handleChromeMessage(msg: ChromeToHostMsg): void {
+    trace(`chrome→host ${msg.type}`, (msg as { id?: string; tool?: string }).id ?? (msg as { tool?: string }).tool)
     switch (msg.type) {
       case "ping":
         this.extensionConnected = true
@@ -138,9 +161,11 @@ export class NativeHost {
         const client = this.clients.get(clientId)
         if (client) {
           const outbound = sep >= 0 ? { ...msg, id: msg.id.slice(sep + 1) } : msg
+          trace(`route tool_response → client`, { clientId, size: JSON.stringify(outbound).length })
           this.sendToClient(client, outbound)
         } else {
           log(`tool_response for unknown client (id=${msg.id})`)
+          trace(`tool_response ROUTE MISS`, { id: msg.id, clients: [...this.clients.keys()] })
         }
         break
       }
@@ -184,6 +209,7 @@ export class NativeHost {
         if (isToolRequestMsg(msg)) {
           if (!this.extensionConnected) {
             // Deterministic failure instead of writing to a dead pipe.
+            trace(`client tool_request but extension NOT connected`, { id: msg.id, tool: msg.tool })
             this.sendToClient(
               client,
               toolError(msg, "extension not connected — open Chrome with the opencode-in-chrome extension"),
@@ -191,6 +217,7 @@ export class NativeHost {
             continue
           }
           // Namespace the correlation id per client: "<clientId>:<requestId>"
+          trace(`client tool_request → chrome`, { tool: msg.tool, id: msg.id })
           this.sendToChrome({
             ...msg,
             id: `${id}:${msg.id}`,
@@ -203,6 +230,7 @@ export class NativeHost {
 
     const disconnect = () => {
       this.clients.delete(id)
+      trace(`client disconnected`, { id })
       log(`mcp client ${id} disconnected (total ${this.clients.size})`)
       this.sendToChrome({ type: "mcp_disconnected", clientId: id })
     }
@@ -220,6 +248,8 @@ export class NativeHost {
 
   async stop(reason: string): Promise<void> {
     log(`stopping: ${reason}`)
+    trace(`stop`, { reason })
+    if (this.heartbeat) clearInterval(this.heartbeat)
     this.server?.close()
     for (const client of this.clients.values()) client.socket.destroy()
     this.clients.clear()

@@ -109,23 +109,34 @@ async function writeManifest(file: string, hostPath: string, allowedOrigins: str
 }
 
 async function cmdInstall(argv: string[]): Promise<void> {
-  const extIdx = argv.indexOf("--ext-id")
-  let extId = extIdx >= 0 && argv[extIdx + 1] ? argv[extIdx + 1] : undefined
   const plat = currentPlatform()
 
-  // Saved extension id from a previous pairing (Fase 3 makes this automatic).
-  if (!extId) {
-    extId = (await readFile(join(bridgeConfigDir(), "ext-id"), "utf8").catch(() => "")).trim() || undefined
+  // All --ext-id flags (union): the WXT build changes the unpacked extension's
+  // directory, hence its ID; allowing old + new keeps the current pairing alive.
+  const argvIds: string[] = []
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--ext-id" && argv[i + 1]) {
+      argvIds.push(argv[i + 1]!.trim())
+      i++
+    }
   }
-  if (!extId) {
+
+  // Saved extension ids from a previous pairing (Fase 3 makes this automatic).
+  const savedIds = (await readFile(join(bridgeConfigDir(), "ext-id"), "utf8").catch(() => ""))
+    .trim()
+    .split(",")
+    .filter(Boolean)
+
+  const ids = [...new Set([...argvIds, ...savedIds])]
+  if (ids.length === 0) {
     fail(
-      "missing --ext-id. Load the unpacked extension (packages/extension), copy its ID from " +
-        "chrome://extensions, then run: oc-chrome-bridge install --ext-id <id>",
+      "missing --ext-id. Load the unpacked extension, copy its ID from chrome://extensions, " +
+        "then run: oc-chrome-bridge install --ext-id <id> (repeat the flag to allow several builds)",
     )
   }
   await mkdir(bridgeConfigDir(), { recursive: true })
-  await writeFile(join(bridgeConfigDir(), "ext-id"), `${extId}\n`)
-  const allowedOrigins = [`chrome-extension://${extId}/`]
+  await writeFile(join(bridgeConfigDir(), "ext-id"), `${ids.join(",")}\n`)
+  const allowedOrigins = ids.map((id) => `chrome-extension://${id}/`)
 
   const runner = await resolveRunner()
   const hostDir = join(bridgeConfigDir(), "host")

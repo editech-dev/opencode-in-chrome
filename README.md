@@ -17,9 +17,25 @@ OpenCode (CLI or local server) ──MCP──▶ oc-chrome-bridge ──native 
 Everything runs on **your machine**: no cloud middleman, no Docker required, no scripts to run per use
 (Chrome spawns the bridge automatically; you install it once).
 
-> **Status:** `v0.0.1` — Fase 0 scaffold (toolchain, MV3 skeleton, native-messaging spike).
-> Browser tools land in Fase 1; MCP integration in Fase 2; side-panel chat in Fase 3.
+> **Status:** `v0.1.0-alpha` — Fase 1 shipped: the extension drives your Chrome
+> (tabs, navigation, page text, full computer use) and the **MCP server is live**:
+> register it once with `oc-chrome-bridge mcp` and your OpenCode sessions get the
+> `oc_chrome_*` browser tools. Side-panel chat (Fase 3) is next.
 > See the roadmap in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Use with OpenCode (Mode A)
+
+```sh
+# one-time: pair the extension + register the MCP server globally
+bun run packages/bridge/src/cli.ts install --ext-id <extension-id-from-chrome://extensions>
+bun run packages/bridge/src/cli.ts mcp
+```
+
+Then in any OpenCode session the agent can ask for `oc_chrome_tabs_context`,
+`oc_chrome_navigate`, `oc_chrome_get_page_text`, `oc_chrome_computer`, … and every
+browser action runs in **a tab group dedicated to that session** — isolated from
+your own tabs, gone when the session ends. Gate the tools as you see fit
+(`permissions` snippet in [packages/bridge/README.md](packages/bridge/README.md)).
 
 ## Requirements
 

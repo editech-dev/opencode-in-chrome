@@ -225,6 +225,61 @@ async function cmdDoctor(): Promise<void> {
     out(`  ${s}: ${responded ? "✓ alive (pong)" : "dead"}`)
   }
   out(alive > 0 ? "✓ live bridge found — the extension can connect" : "— no live bridge; open Chrome with the extension to spawn one")
+
+  // MCP health (T16): entry file + OpenCode registration + node coverage.
+  out("")
+  const mcpEntry = join(HERE, "mcp.ts")
+  const entryOk = await access(mcpEntry).then(() => true, () => false)
+  out(`mcp server file: ${entryOk ? `✓ ${mcpEntry}` : "✗ missing (reinstall the bridge)"}`)
+  const opencodePaths = [
+    join(homedir(), ".config", "opencode", "opencode.jsonc"),
+    join(homedir(), ".config", "opencode", "opencode.json"),
+    join(process.env["XDG_CONFIG_HOME"] ?? join(homedir(), ".config"), "opencode", "opencode.jsonc"),
+  ]
+  let registered: string | null = null
+  for (const cfgFile of opencodePaths) {
+    const text = await readFile(cfgFile, "utf8").catch(() => "")
+    if (/"oc-chrome"\s*:/.test(text)) registered = cfgFile
+  }
+  const projCfg = join(process.cwd(), "opencode.jsonc")
+  if (!registered && /"oc-chrome"\s*:/.test(await readFile(projCfg, "utf8").catch(() => ""))) {
+    registered = `${projCfg} (project)`
+  }
+  out(`mcp registration: ${registered ? `✓ in ${registered}` : "— not registered (run: bun run src/cli.ts mcp)"}`)
+
+  const oc = await locate("opencode").then((p) => p)
+  if (oc && registered && entryOk && alive > 0) {
+    out("✓ MCP chain ready — try: opencode run \"open example.com in my tab group and read its title\"")
+  }
+}
+
+/** mcp — registers the oc-chrome MCP server with OpenCode (T14). */
+async function cmdMcp(argv: string[]): Promise<void> {
+  const http = argv.includes("--http")
+  const mcpEntry = join(HERE, "mcp.ts")
+  await access(mcpEntry).then(
+    () => true,
+    () => false,
+  ) || fail("mcp entrypoint missing — reinstall the bridge package")
+  const oc = await locate("opencode")
+  if (!oc) {
+    out("opencode is not on PATH — run this yourself:")
+    out(`  opencode mcp add oc-chrome -- ${await resolveRunner().then((r) => r.fullPath)} run ${mcpEntry}`)
+    return
+  }
+  const runner = await resolveRunner()
+  const args = http
+    ? ["mcp", "add", "oc-chrome", "--global", "--url", "http://127.0.0.1:9600/mcp"]
+    : ["mcp", "add", "oc-chrome", "--global", "--", runner.fullPath, "run", mcpEntry]
+  const { code, stdout } = await run(oc, args, 15_000)
+  out(stdout.trim() || (code === 0 ? "✓ registered" : ""))
+  if (code !== 0) fail("opencode mcp add failed — see output above")
+  out("")
+  out(http
+    ? "⚠ HTTP mode needs the gateway running: bun run packages/bridge/src/mcp.ts --http"
+    : "✓ global — `oc_chrome_*` tools work in every project (permissions: ask per action, see README)")
+  const list = await run(oc, ["mcp", "list", "--log-level", "fatal"], 10_000)
+  if (list.stdout.trim()) out(`\n${list.stdout.trim()}`)
 }
 
 const [, , command, ...argv] = process.argv
@@ -233,11 +288,12 @@ const commands: Record<string, (argv: string[]) => Promise<void>> = {
   uninstall: cmdUninstall,
   status: cmdStatus,
   doctor: cmdDoctor,
+  mcp: cmdMcp,
 }
 
 if (!command || command === "--help" || command === "help") {
   out(`oc-chrome-bridge ${VERSION} — connects OpenCode to your Chrome`)
-  out("usage: oc-chrome-bridge <install|uninstall|status|doctor> [--ext-id <extension-id>]")
+  out("usage: oc-chrome-bridge <install|uninstall|status|doctor|mcp> [--ext-id <extension-id>]")
 } else if (command === "--version" || command === "version") {
   out(`oc-chrome-bridge ${VERSION}`)
 } else if (commands[command]) {

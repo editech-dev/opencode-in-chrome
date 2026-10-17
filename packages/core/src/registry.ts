@@ -20,6 +20,8 @@ export type ToolDefinition = {
   risk: RiskLevel
   /** true → included in the Fase 1 catalog; false → backlog. */
   inFase1: boolean
+  /** true → the extension SW dispatcher implements this tool TODAY (MCP lists only these). */
+  live?: boolean
 }
 
 export type ToolContext = {

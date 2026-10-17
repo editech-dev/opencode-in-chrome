@@ -17,6 +17,7 @@ export const CATALOG: ToolDefinition[] = [
     inputSchema: { type: "object", properties: { createIfEmpty: { type: "boolean" } } },
     risk: "read_only",
     inFase1: true,
+    live: true,
   },
   {
     name: "tabs_create",
@@ -25,6 +26,7 @@ export const CATALOG: ToolDefinition[] = [
     inputSchema: { type: "object", properties: { url: { type: "string" }, active: { type: "boolean" } } },
     risk: "read_only",
     inFase1: true,
+    live: true,
   },
   {
     name: "tabs_close",
@@ -33,6 +35,7 @@ export const CATALOG: ToolDefinition[] = [
     inputSchema: { type: "object", properties: { tabId: { type: "number" } }, required: ["tabId"] },
     risk: "mutates_page",
     inFase1: true,
+    live: true,
   },
   {
     name: "navigate",
@@ -41,6 +44,7 @@ export const CATALOG: ToolDefinition[] = [
     inputSchema: { type: "object", properties: { url: { type: "string" }, tabId: { type: "number" } }, required: ["url"] },
     risk: "read_only",
     inFase1: true,
+    live: true,
   },
   {
     name: "computer",
@@ -62,6 +66,7 @@ export const CATALOG: ToolDefinition[] = [
     },
     risk: "mutates_page",
     inFase1: true,
+    live: true,
   },
   {
     name: "read_page",
@@ -78,6 +83,7 @@ export const CATALOG: ToolDefinition[] = [
     inputSchema: { type: "object", properties: { tabId: { type: "number" } } },
     risk: "read_only",
     inFase1: true,
+    live: true,
   },
   {
     name: "find",

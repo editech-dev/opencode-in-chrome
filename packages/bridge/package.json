@@ -9,7 +9,8 @@
     "oc-chrome-bridge": "./src/cli.ts"
   },
   "dependencies": {
-    "@opencode-in-chrome/shared": "workspace:*"
+    "@opencode-in-chrome/shared": "workspace:*",
+    "@opencode-in-chrome/core": "workspace:*"
   },
   "files": [
     "src"

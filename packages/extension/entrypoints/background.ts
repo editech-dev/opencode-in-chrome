@@ -243,7 +243,10 @@ export default defineBackground(() => {
         expression: 'document.body ? document.body.innerText : ""',
         returnByValue: true,
       })
-      const raw = typeof res?.result?.value === "string" ? res.result.value : ""
+      // send() already unwraps the CDP envelope → we hold the RemoteObject itself
+      // ({type:"string", value:…}); pre-WXT code read res.result.value on the raw
+      // response and double-unwraped to "" (regression caught by the MCP e2e).
+      const raw = typeof res?.value === "string" ? res.value : ""
       const clean = redactAll(raw)
       const truncated = clean.length > MAX_TEXT_CHARS
       return {

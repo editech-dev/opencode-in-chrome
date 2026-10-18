@@ -29,7 +29,9 @@ import {
   toolError,
   type ChromeToHostMsg,
   type SocketClientMsg,
+  type OpRequestMsg,
 } from "@opencode-in-chrome/shared"
+import { opFetch, opRoute, parseSseFrame, readServiceInfo, authHeader } from "./op-proxy"
 
 export const NATIVE_HOST_VERSION = PROTOCOL_VERSION + ".0"
 
@@ -172,6 +174,87 @@ export class NativeHost {
       case "notification":
         for (const client of this.clients.values()) this.sendToClient(client, msg)
         break
+      case "op_request":
+        trace(`op_request → server`, { op: msg.op, id: msg.id })
+        void this.handleOpRequest(msg)
+        break
+    }
+  }
+
+  // ── Modo B: OpenCode proxy (T17) ────────────────────────────────────────────
+
+  private async handleOpRequest(msg: OpRequestMsg): Promise<void> {
+    // events_on/events_off drive the SSE pipe; everything else is one REST call.
+    if (msg.op === "events_on") {
+      if (!this.sseAbort) {
+        const ac = new AbortController()
+        this.sseAbort = ac
+        void this.runEventPipe(ac)
+      }
+      this.sendToChrome({ type: "op_response", id: msg.id, ok: true, result: { streaming: true } })
+      return
+    }
+    if (msg.op === "events_off") {
+      this.sseAbort?.abort()
+      this.sseAbort = null
+      this.sendToChrome({ type: "op_response", id: msg.id, ok: true, result: { streaming: false } })
+      return
+    }
+    try {
+      const route = opRoute(msg.op, msg.args)
+      const res = await opFetch(route.method, route.path, route.body)
+      trace(`op_response`, { op: msg.op, id: msg.id, ok: res.ok })
+      this.sendToChrome(
+        res.ok
+          ? { type: "op_response", id: msg.id, ok: true, result: res.result }
+          : { type: "op_response", id: msg.id, ok: false, error: res.error },
+      )
+    } catch (err) {
+      trace(`op_response error`, { op: msg.op, id: msg.id })
+      this.sendToChrome({ type: "op_response", id: msg.id, ok: false, error: { message: (err as Error).message } })
+    }
+  }
+
+  private sseAbort: AbortController | null = null
+
+  /** SSE loop for GET /api/event: reconnects while the pipe is wanted, aborts on request. */
+  private async runEventPipe(ac: AbortController): Promise<void> {
+    const decoder = new TextDecoder()
+    try {
+      while (!ac.signal.aborted) {
+        try {
+          const info = await readServiceInfo()
+          const res = await fetch(`${info.url}/api/event`, {
+            headers: { Authorization: authHeader(info), accept: "text/event-stream" },
+            signal: ac.signal,
+          })
+          if (!res.ok || !res.body) throw new Error(`/api/event ${res.status}`)
+          const reader = res.body.getReader()
+          let buf = ""
+          while (!ac.signal.aborted) {
+            const { value, done } = await reader.read()
+            if (done) break
+            buf += decoder.decode(value, { stream: true })
+            for (;;) {
+              const sep = buf.indexOf("\n\n")
+              if (sep < 0) break
+              const parsed = parseSseFrame(buf.slice(0, sep))
+              buf = buf.slice(sep + 2)
+              if (parsed && this.extensionConnected) {
+                this.sendToChrome({ type: "op_event", event: parsed.event, properties: parsed.properties })
+              }
+            }
+          }
+        } catch (err) {
+          if (ac.signal.aborted) return
+          trace(`event pipe retry`, { message: (err as Error).message })
+        }
+        // Whether the stream ended cleanly (server restart) or failed (server
+        // down), reconnect gently — the port re-read keeps port changes cheap.
+        if (!ac.signal.aborted) await new Promise((r) => setTimeout(r, 1500))
+      }
+    } finally {
+      if (this.sseAbort === ac) this.sseAbort = null
     }
   }
 
@@ -250,6 +333,8 @@ export class NativeHost {
     log(`stopping: ${reason}`)
     trace(`stop`, { reason })
     if (this.heartbeat) clearInterval(this.heartbeat)
+    this.sseAbort?.abort()
+    this.sseAbort = null
     this.server?.close()
     for (const client of this.clients.values()) client.socket.destroy()
     this.clients.clear()

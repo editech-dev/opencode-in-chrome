@@ -79,15 +79,50 @@ export type NotificationMsg = {
   payload?: unknown
 }
 
+// ── Modo B: OpenCode proxy (panel → SW → host → local server) ────────────────
+// The host holds the OpenCode basic-auth password (invariant I4) — the browser
+// side only ever names operations, never credentials. Server responses pass
+// through raw (envelope {location, data}), keeping the host thin.
+
+export type OpRequestMsg = {
+  type: "op_request"
+  id: string
+  /** e.g. info | list_sessions | create_session | prompt | list_models | list_agents | events_on | events_off */
+  op: string
+  args?: unknown
+}
+
+export type OpResponseMsg = {
+  type: "op_response"
+  id: string
+  ok: true
+  result: unknown
+} | {
+  type: "op_response"
+  id: string
+  ok: false
+  error: { message: string }
+}
+
+/** One parsed GET /api/event frame, broadcast while the SSE pipe is open. */
+export type OpEventMsg = {
+  type: "op_event"
+  /** OpenCode event name, e.g. "server.connected" | "message.updated" | "message.part.updated". */
+  event: string
+  properties: unknown
+}
+
 // ── Unions ───────────────────────────────────────────────────────────────────
 
-export type ChromeToHostMsg = PingMsg | GetStatusMsg | ToolResponseMsg | NotificationMsg
+export type ChromeToHostMsg = PingMsg | GetStatusMsg | ToolResponseMsg | NotificationMsg | OpRequestMsg
 export type HostToChromeMsg =
   | PongMsg
   | StatusResponseMsg
   | McpConnectedMsg
   | McpDisconnectedMsg
   | ToolRequestMsg
+  | OpResponseMsg
+  | OpEventMsg
 
 export type SocketClientMsg = ToolRequestMsg | { type: "ping" }
 export type HostToClientMsg = ToolResponseMsg | NotificationMsg | PongMsg
@@ -110,6 +145,8 @@ export function isChromeToHostMsg(x: unknown): x is ChromeToHostMsg {
       return typeof x["id"] === "string" && (isRecord(x["result"]) || isRecord(x["error"]))
     case "notification":
       return typeof x["event"] === "string"
+    case "op_request":
+      return isOpRequestMsg(x)
     default:
       return false
   }
@@ -123,6 +160,16 @@ export function isToolRequestMsg(x: unknown): x is ToolRequestMsg {
     typeof x["id"] === "string" &&
     typeof x["tool"] === "string" &&
     typeof x["clientId"] === "string"
+  )
+}
+
+/** Guards a Chrome op_request before the host turns it into an HTTP call. */
+export function isOpRequestMsg(x: unknown): x is OpRequestMsg {
+  return (
+    isRecord(x) &&
+    x["type"] === "op_request" &&
+    typeof x["id"] === "string" &&
+    typeof x["op"] === "string"
   )
 }
 

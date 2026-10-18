@@ -35,7 +35,8 @@ Then in any OpenCode session the agent can ask for `oc_chrome_tabs_context`,
 `oc_chrome_navigate`, `oc_chrome_get_page_text`, `oc_chrome_computer`, … and every
 browser action runs in **a tab group dedicated to that session** — isolated from
 your own tabs, gone when the session ends. Gate the tools as you see fit
-(`permissions` snippet in [packages/bridge/README.md](packages/bridge/README.md)).
+(`permissions` snippet in [packages/bridge/README.md](packages/bridge/README.md);
+the permission key keeps the server dash: `oc-chrome_*`).
 
 ## Requirements
 

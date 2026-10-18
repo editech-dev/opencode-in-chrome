@@ -36,13 +36,15 @@ Transports:
   browser gateway across projects. Pass the port as `--http 9630`.
 
 Permissions — the browser is an agent hand, so gate it (paste into
-`~/.config/opencode/opencode.jsonc` under `permissions`):
+`~/.config/opencode/opencode.jsonc` under `permissions`). NOTE the dash: the
+permission key is `<server-name>_<tool>` and our server name is `oc-chrome`
+(a rule with `oc_chrome_*` matches nothing — verified live against V2.0.32):
 
 ```jsonc
-{ "action": "oc_chrome_*", "resource": "*", "effect": "ask" }
+{ "action": "oc-chrome_*", "resource": "*", "effect": "ask" }
 // After you trust it day-to-day you may soften the read-only family:
-// { "action": "oc_chrome_tabs_*",   "resource": "*", "effect": "allow" },
-// { "action": "oc_chrome_get_page_text", "resource": "*", "effect": "allow" }
+// { "action": "oc-chrome_tabs_*",   "resource": "*", "effect": "allow" },
+// { "action": "oc-chrome_get_page_text", "resource": "*", "effect": "allow" }
 ```
 
 Secrets never leave the socket in the clear: every text payload crosses the

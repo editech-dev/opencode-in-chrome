@@ -59,17 +59,23 @@ export default defineBackground(() => {
 
   /** sessionId → { tabGroupId, windowId } */
   const sessionGroups = new Map<string, { tabGroupId: number; windowId: number }>()
+  /** windowId → the ONE OpenCode group this window hosts (panel flow — Claude parity). */
+  const windowGroups = new Map<number, { tabGroupId: number; sessionId: string }>()
 
   async function loadSessionGroups() {
-    const { sessionGroupsSnapshot } = await browser.storage.local
-      .get("sessionGroupsSnapshot")
+    const { sessionGroupsSnapshot, windowGroupsSnapshot } = await browser.storage.local
+      .get(["sessionGroupsSnapshot", "windowGroupsSnapshot"])
       .catch(() => ({}) as Record<string, never>)
     for (const [k, v] of Object.entries(sessionGroupsSnapshot ?? {})) sessionGroups.set(k, v as never)
+    for (const [k, v] of Object.entries(windowGroupsSnapshot ?? {})) windowGroups.set(Number(k), v as never)
   }
 
   async function saveSessionGroups() {
     const snapshot = Object.fromEntries(sessionGroups)
-    await browser.storage.local.set({ sessionGroupsSnapshot: snapshot }).catch(() => {})
+    const windowSnapshot = Object.fromEntries([...windowGroups.entries()].map(([k, v]) => [String(k), v]))
+    await browser.storage.local
+      .set({ sessionGroupsSnapshot: snapshot, windowGroupsSnapshot: windowSnapshot } as never)
+      .catch(() => {})
   }
 
   function setStatus(patch: Partial<typeof lastStatus>) {
@@ -87,11 +93,41 @@ export default defineBackground(() => {
     return groups.map((g) => g.id)
   }
 
-  async function ensureGroup(sessionId: string, createIfEmpty: boolean) {
+  async function ensureGroup(
+    sessionId: string,
+    createIfEmpty: boolean,
+    opts?: { windowId?: number; adoptable?: boolean },
+  ) {
     const entry = sessionGroups.get(sessionId)
     const alive = await liveGroupIds()
 
     if (entry && alive.includes(entry.tabGroupId)) return entry
+
+    // T-D1 (resuelto por pedido del usuario, 17-oct): el grupo vive en la
+    // ventana ACTUAL — el grupo es la frontera de aislamiento, no la ventana
+    // (paridad Claude in Chrome). Origen del windowId: el panel que llamó
+    // > última ventana con foco.
+    let target = opts?.windowId
+    if (target === undefined) {
+      const last = await browser.windows
+        .getLastFocused({ populate: false })
+        .catch(() => null as { id?: number } | null)
+      target = last?.id
+    }
+
+    // ── Modo B unification (17-oct, root cause of the group-multiplication bug) ──
+    // Tool calls made by the panel chat's agent carry the MCP PROCESS id
+    // ("mcp-…"), stable per OpenCode SERVER process, not per session — so
+    // creating a group for it would multiply groups on every respawn and
+    // split the panel chat (its seed group) from its own tool calls. When a
+    // panel group exists in this window, the tool call RIDES IT dynamically.
+    if (sessionId.startsWith("mcp-") && target !== undefined) {
+      const wg = windowGroups.get(target)
+      if (wg && alive.includes(wg.tabGroupId)) {
+        return { tabGroupId: wg.tabGroupId, windowId: target }
+      }
+      // No panel group here → own group for this MCP process (Modo A CLI).
+    }
 
     if (!createIfEmpty) {
       if (entry) {
@@ -101,17 +137,104 @@ export default defineBackground(() => {
       throw new Error(noGroupError("tabs_context"))
     }
 
-    const win = await browser.windows.create({ focused: false })
-    if (!win) throw new Error("tabs_context: chrome refused to open the session window")
-    const seedTabId = win.tabs?.[0]?.id
-    if (seedTabId === undefined || win.id === undefined) {
-      throw new Error("tabs_context: chrome did not return a window with a seed tab")
+    if (target === undefined) {
+      // Chrome sin ventanas visibles (arranque exótico): el camino viejo.
+      const win = await browser.windows.create({ focused: false })
+      if (!win) throw new Error("tabs_context: chrome refused to open the session window")
+      const seedTabId = win.tabs?.[0]?.id
+      if (seedTabId === undefined || win.id === undefined) {
+        throw new Error("tabs_context: chrome did not return a window with a seed tab")
+      }
+      const groupId = await browser.tabs.group({ tabIds: [seedTabId], createProperties: { windowId: win.id } })
+      const fresh = { tabGroupId: groupId, windowId: win.id }
+      sessionGroups.set(sessionId, fresh)
+      await saveSessionGroups()
+      await brandGroup(groupId)
+      return fresh
     }
-    const groupId = await browser.tabs.group({ tabIds: [seedTabId], createProperties: { windowId: win.id } })
-    const fresh = { tabGroupId: groupId, windowId: win.id }
+
+    // ── Panel flow: ONE OpenCode group per window (Claude parity) ──────────
+    // Invariant: a Chrome group DIES when its last tab dies. So "clear the
+    // context" must never empty it: keep ONE survivor tab, close the rest,
+    // navigate the survivor to the user's current page ("se lleva la página").
+    // That keeps the same groupId alive forever — ＋ never multiplies groups.
+    let reuseGroupId: number | undefined
+    if (opts?.adoptable) {
+      const previous = windowGroups.get(target)
+      if (previous && previous.sessionId !== sessionId && alive.includes(previous.tabGroupId)) {
+        reuseGroupId = previous.tabGroupId
+        sessionGroups.delete(previous.sessionId)
+      } else {
+        // Orphaned OpenCode group in this window (built before windowGroups
+        // existed, or the SW lost its state): adopt by branding, if unclaimed.
+        const windowGroupsAll = await browser.tabGroups.query({ windowId: target }).catch(() => [])
+        const claimed = new Set([...sessionGroups.values()].map((e) => e.tabGroupId))
+        const orphan = windowGroupsAll.find((g) => g.title === "OpenCode" && !claimed.has(g.id))
+        if (orphan) reuseGroupId = orphan.id
+      }
+    }
+
+    let seedTabId: number | undefined
+    if (reuseGroupId !== undefined) {
+      // Adopt: keep one survivor, close the rest, navigate it to the current page.
+      const tabs = await browser.tabs.query({ groupId: reuseGroupId }).catch(() => [])
+      const ids = tabs.map((t) => t.id).filter((id): id is number => id !== undefined)
+      const survivor = ids[0]
+      const rest = ids.slice(1)
+      if (rest.length > 0) await browser.tabs.remove(rest).catch(() => {})
+      if (survivor !== undefined) {
+        const activeTab = (await browser.tabs.query({ windowId: target, active: true }).catch(() => []))[0]
+        if (activeTab?.url && /^https?:/.test(activeTab.url)) {
+          await browser.tabs.update(survivor, { url: activeTab.url, active: false }).catch(() => {})
+        } else {
+          await browser.tabs.update(survivor, { active: false }).catch(() => {})
+        }
+        seedTabId = survivor
+      }
+      if (seedTabId === undefined) {
+        // The group died anyway (race) — fall through to the fresh path.
+        reuseGroupId = undefined
+      }
+    }
+
+    if (reuseGroupId === undefined) {
+      // Fresh: duplicate the active tab (carries the page), group it anew.
+      const activeTab = (await browser.tabs.query({ windowId: target, active: true }).catch(() => []))[0]
+      if (activeTab?.id !== undefined) {
+        const dup = await browser.tabs.duplicate(activeTab.id).catch(() => null)
+        seedTabId = dup?.id
+        if (seedTabId !== undefined) await browser.tabs.update(seedTabId, { active: false }).catch(() => {})
+      }
+      if (seedTabId === undefined) {
+        const made = await browser.tabs.create({ windowId: target, active: false }).catch(() => null)
+        seedTabId = made?.id
+      }
+      if (seedTabId === undefined) throw new Error("tabs_context: chrome did not return a seed tab")
+    }
+
+    if (seedTabId === undefined) throw new Error("tabs_context: no seed tab survived adoption")
+    let groupId
+    if (reuseGroupId !== undefined) {
+      groupId = browser.tabs.group({ tabIds: [seedTabId], groupId: reuseGroupId })
+    } else {
+      groupId = browser.tabs.group({ tabIds: [seedTabId], createProperties: { windowId: target } })
+    }
+    const gid = await groupId
+    const fresh = { tabGroupId: gid, windowId: target }
     sessionGroups.set(sessionId, fresh)
+    if (opts?.adoptable) windowGroups.set(target, { tabGroupId: gid, sessionId })
     await saveSessionGroups()
+    await brandGroup(gid)
     return fresh
+  }
+
+  /** Names + colors the group so the user sees whose tabs are whose. */
+  async function brandGroup(groupId: number): Promise<void> {
+    try {
+      await browser.tabGroups.update(groupId, { color: "orange", title: "OpenCode" })
+    } catch {
+      // cosmetic only
+    }
   }
 
   async function groupTabs(entry: { tabGroupId: number }) {
@@ -548,6 +671,20 @@ export default defineBackground(() => {
           message: String(msg.event ?? ""),
         })
         break
+      case "op_response": {
+        const pending = typeof msg.id === "string" ? pendingOps.get(msg.id) : undefined
+        if (pending) {
+          pendingOps.delete(msg.id)
+          if (msg.ok === true) pending.resolve(msg.result)
+          else pending.reject(new Error(String(msg?.error?.message ?? "op failed")))
+        }
+        break
+      }
+      case "op_event":
+        browser.runtime
+          .sendMessage({ kind: "opEvent", event: msg.event, properties: msg.properties })
+          .catch(() => {}) // no receiver (no panel open) is normal
+        break
       default:
         break
     }
@@ -571,12 +708,122 @@ export default defineBackground(() => {
 
   // ── Side panel messaging ───────────────────────────────────────────────────
 
-  browser.runtime.onMessage.addListener((msg: HostMessage, _sender, sendResponse) => {
-    if (msg?.kind === "getStatus") sendResponse(lastStatus)
-    return false
-  })
+  // Modo B (T17): the panel names operations; the host holds the credentials
+  // (I4) and runs them against the local OpenCode server. Responses are
+  // correlated by id; SSE events fan out to every extension page.
+  const pendingOps = new Map<string, { resolve: (r: unknown) => void; reject: (e: Error) => void }>()
+  let opSeq = 0
 
-  browser.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {})
+  function sendOp(op: string, args?: unknown): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      if (!port) {
+        reject(new Error("bridge not connected — the native host must be running"))
+        return
+      }
+      const id = `op-${++opSeq}-${Date.now().toString(36)}`
+      const timer = setTimeout(() => {
+        pendingOps.delete(id)
+        reject(new Error(`op ${op} timed out`))
+      }, 30_000)
+      pendingOps.set(id, {
+        resolve: (r) => {
+          clearTimeout(timer)
+          resolve(r)
+        },
+        reject: (e) => {
+          clearTimeout(timer)
+          reject(e)
+        },
+      })
+      port?.postMessage({ type: "op_request", id, op, args } as never)
+    })
+  }
+
+  browser.runtime.onMessage.addListener(
+    (msg: HostMessage & { kind?: string; op?: string; args?: any }, sender, sendResponse) => {
+      if (msg?.kind === "getStatus") {
+        sendResponse(lastStatus)
+      } else if (msg?.kind === "op" && typeof msg.op === "string") {
+        // Local ops (no server, no host roundtrip): the panel's session context.
+        if (msg.op === "ensure_group") {
+          void ensureGroup(String(msg.args?.sessionId ?? ""), true, {
+            windowId: sender?.tab?.windowId,
+            adoptable: true, // panel flow: one OpenCode group per window, adopt + clear
+          }).then(
+            (entry) => sendResponse({ ok: true, result: entry }),
+            (err: Error) => sendResponse({ ok: false, error: err.message }),
+          )
+          return true
+        }
+        if (msg.op === "group_tabs") {
+          void (async () => {
+            const entry = sessionGroups.get(String(msg.args?.sessionId ?? ""))
+            if (!entry) return { ok: true, result: [] }
+            const tabs = await browser.tabs.query({ groupId: entry.tabGroupId })
+            return { ok: true, result: tabs.map((t) => ({ id: t.id, title: t.title ?? "", active: t.active })) }
+          })().then(
+            (r) => sendResponse(r),
+            (err: Error) => sendResponse({ ok: false, error: err.message }),
+          )
+          return true
+        }
+        if (msg.op === "current_page") {
+          void (async () => {
+            const entry = sessionGroups.get(String(msg.args?.sessionId ?? ""))
+            if (!entry) return { ok: true, result: null }
+            const tabs = await browser.tabs.query({ groupId: entry.tabGroupId })
+            const page = tabs.find((t) => t.active) ?? tabs[0]
+            if (!page?.id) return { ok: true, result: null }
+            return { ok: true, result: { tabId: page.id, url: page.url ?? "", title: page.title ?? "" } }
+          })().then(
+            (r) => sendResponse(r),
+            (err: Error) => sendResponse({ ok: false, error: err.message }),
+          )
+          return true
+        }
+        if (msg.op === "focus_tab") {
+          const id = Number(msg.args?.tabId)
+          if (!Number.isFinite(id)) {
+            sendResponse({ ok: false, error: "focus_tab: tabId required" })
+            return false
+          }
+          void (async () => {
+            const tab = await browser.tabs.update(id, { active: true })
+            if (tab?.windowId !== undefined) await browser.windows.update(tab.windowId, { focused: true })
+            return { ok: true, result: { tabId: id } }
+          })().then(
+            (r) => sendResponse(r),
+            (err: Error) => sendResponse({ ok: false, error: err.message }),
+          )
+          return true
+        }
+        void sendOp(msg.op, msg.args).then(
+          (result) => sendResponse({ ok: true, result }),
+          (err: Error) => sendResponse({ ok: false, error: err.message }),
+        )
+        return true // async sendResponse
+      }
+      return false
+    },
+  )
+
+  // ── Side panel scoped to the TAB it was raised on (user request, 17-oct) ──
+  // Chrome side panels are window-level by default ("el chat queda en todo").
+  // We scope per tab: open → remember the tab; switching tabs hides the panel;
+  // returning to the tab brings it back. Each page keeps its own chat instance.
+  const panelTabs = new Set<number>()
+  browser.action.onClicked.addListener((tab) => {
+    void (async () => {
+      if (tab.id === undefined) return
+      // open() FIRST — it needs the click gesture alive; options afterwards.
+      await browser.sidePanel.open({ tabId: tab.id }).catch(() => {})
+      await browser.sidePanel.setOptions({ tabId: tab.id, path: "sidepanel.html", enabled: true }).catch(() => {})
+      panelTabs.add(tab.id)
+    })()
+  })
+  browser.tabs.onActivated.addListener(({ tabId }) => {
+    void browser.sidePanel.setOptions({ tabId, enabled: panelTabs.has(tabId) }).catch(() => {})
+  })
 
   browser.runtime.onInstalled.addListener(() => connectHost())
   browser.runtime.onStartup.addListener(() => connectHost())

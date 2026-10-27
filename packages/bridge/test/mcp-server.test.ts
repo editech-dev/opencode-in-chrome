@@ -127,6 +127,25 @@ describe("relay (wire framing through a real socket)", () => {
     expect((lastReceived as { sessionScope: { sessionId: string } }).sessionScope.sessionId).toBe("s1")
   })
 
+  test("tools/call passes the REAL sessionID from _meta (contract #8 — TD-1 fix)", async () => {
+    lastReceived = null
+    const bridge = new McpBridge("test-session")
+    const res = (await bridge.handle(req(7, "tools/call", {
+      name: "tabs_context",
+      arguments: { createIfEmpty: false },
+      _meta: { "ai.opencode/sessionID": "ses_real9182", progressToken: 2 },
+    }))) as { result: { content: Array<{ type: string; text: string }> } }
+    expect(res.result.content[0]).toEqual({ type: "text", text: "relay-answer" })
+    expect((lastReceived as unknown as { sessionScope?: { sessionId?: string } }).sessionScope?.sessionId).toBe("ses_real9182")
+  })
+
+  test("tools/call without _meta keeps the process fallback sessionId", async () => {
+    lastReceived = null
+    const bridge = new McpBridge("test-session")
+    await bridge.handle(req(8, "tools/call", { name: "tabs_context", arguments: {} }))
+    expect((lastReceived as unknown as { sessionScope?: { sessionId?: string } }).sessionScope?.sessionId).toBe("test-session")
+  })
+
   test("concurrent dispatches match responses by id (multiplex)", async () => {
     const relay = new HostRelay()
     const [a, b] = await Promise.all([

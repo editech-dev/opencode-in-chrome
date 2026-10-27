@@ -115,7 +115,12 @@ export default defineBackground(() => {
       target = last?.id
     }
 
-    // ── Modo B unification (17-oct, root cause of the group-multiplication bug) ──
+    // ── Modo B unification (27-oct: CINTURÓN DE SEGURIDAD, no cimiento) ─────────
+    // Root cause del bug de multiplicación: identidad dual ses vs proceso MCP.
+    // RESUELTO EN LA FUENTE (contrato #8): el tools/call real ya trae
+    // _meta["ai.opencode/sessionID"] → las tool calls llegan con ses_ REAL y
+    // montan en el mapping del propio flujo del panel. Este ride queda como
+    // fallback para callers SIN _meta (OpenCode viejo, probes desnudos).
     // Tool calls made by the panel chat's agent carry the MCP PROCESS id
     // ("mcp-…"), stable per OpenCode SERVER process, not per session — so
     // creating a group for it would multiply groups on every respawn and

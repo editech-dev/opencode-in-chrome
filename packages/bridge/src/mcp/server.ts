@@ -95,9 +95,26 @@ export class McpBridge {
         return { jsonrpc: "2.0", id: m.id, result: { tools: this.liveTools() } }
       }
       case "tools/call": {
-        const p = m.params as { name?: string; arguments?: unknown } | undefined
+        // Contract #8 (live 27-oct, OpenCode 2.2.0): the REAL MCP client passes
+        // the OpenCode sessionID per call — over stdio AND over the experimental
+        // client-mcp WS — in params._meta["ai.opencode/sessionID"] (next to a
+        // progressToken). That is the true identity for session isolation (I1):
+        // tool calls bind to the actual OpenCode session, so tab groups follow
+        // real sessions even though this process is shared server-wide.
+        // Fallback (older clients / bare probes): the process sessionId.
+        const p = m.params as
+          | { name?: string; arguments?: unknown; _meta?: Record<string, unknown> }
+          | undefined
+        if (process.env["OCIC_TRACE"]) {
+          process.stderr.write(`[oc-chrome-mcp][trace] tools/call ${JSON.stringify({ name: p?.name, _meta: p?._meta ?? null })}\n`)
+        }
+        const realSessionId = p?._meta?.["ai.opencode/sessionID"]
         const name = typeof p?.name === "string" ? p.name : ""
-        return { jsonrpc: "2.0", id: m.id, result: await this.callTool(name, p?.["arguments"]) }
+        return {
+          jsonrpc: "2.0",
+          id: m.id,
+          result: await this.callTool(name, p?.arguments, typeof realSessionId === "string" ? realSessionId : undefined),
+        }
       }
       default:
         // unknown method → -32601 (the .handle fallback builds it)
@@ -105,7 +122,7 @@ export class McpBridge {
     }
   }
 
-  private async callTool(name: string, args: unknown): Promise<ToolResult & { isError?: boolean }> {
+  private async callTool(name: string, args: unknown, realSessionId?: string): Promise<ToolResult & { isError?: boolean }> {
     const known = CATALOG.find((t) => t.name === name)
     if (!known) {
       return {
@@ -118,7 +135,7 @@ export class McpBridge {
       return { ok: false, isError: true, content: [{ type: "text", text: `${name}: arguments must be an object` }] }
     }
     try {
-      const res = await this.relay.dispatch({ tool: name, args, sessionScope: { sessionId: this.sessionId } })
+      const res = await this.relay.dispatch({ tool: name, args, sessionScope: { sessionId: realSessionId ?? this.sessionId } })
       if (!res.ok) {
         return {
           ok: false,

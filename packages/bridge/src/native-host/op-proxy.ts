@@ -8,7 +8,7 @@
  *
  * Server contracts verified live against OpenCode V2.0.32 (specs/06):
  *   GET  /api/info                 → {version, pid, urls[], ...}
- *   GET  /api/session              → envelope {location:{directory}, data:[...]}
+ *   GET  /api/session              → { data:[...], cursor? } (directory filter via ?directory=)
  *   POST /api/session              {title?, location{directory}?, agent?} → {data:{id,...}}
  *   GET  /api/session/{id}/message → session transcript (V2 shape passthrough)
  *   POST /api/session/{id}/prompt  {text, files?} → async; results stream on /api/event

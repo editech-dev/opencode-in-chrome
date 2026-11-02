@@ -12,6 +12,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - Side panel is scoped to its OpenCode tab group: removed `side_panel.default_path` (global
   panel), per-tab enable/disable, the host tab joins the group, and the chat is restored per
   window.
+- The panel history (⟲) is scoped to the panel's scratch directory with a fallback
+  to the panel's own session markers; the "todas" toggle that exposed CLI sessions is gone.
+- Panel sessions get a conversation title (`Panel — <first prompt>`) instead of every entry
+  being called "Panel".
 
 ### Changed
 - Docs: the permission key is `oc-chrome_*` (server dash preserved), and rule ordering is

@@ -8,6 +8,8 @@
 
 import { browser } from "wxt/browser"
 import { movePermissionDecision, type PermissionDecision } from "../../../core/src/perm-nav"
+import { isPanelSession } from "../../../core/src/panel-sessions"
+import { isDefaultPanelTitle, panelTitleFromPrompt } from "../../../core/src/panel-title"
 
 const el = (id: string) => document.getElementById(id)
 
@@ -37,7 +39,7 @@ function unwrapEnvelope<T>(result: unknown): T[] {
 
 type ModelRow = { providerID: string; modelID: string; name: string; enabled: boolean; status: string }
 type AgentRow = { id: string; name: string; mode: string; hidden: boolean }
-type SessionRow = { id: string; title?: string; time?: { updated?: number } }
+type SessionRow = { id: string; title?: string; location?: { directory?: string }; time?: { updated?: number } }
 type MessageRow = {
   id: string
   sessionID: string
@@ -58,7 +60,8 @@ const state = {
   selModel: "",
   selAgent: "",
   busy: false,
-  showAll: false,
+  /** Sessions created by this panel (specs/10) — persisted across restarts. */
+  panelIds: new Set<string>(),
   sessionQ: "",
   /** Pending permission asks for the ACTIVE session (permission.asked). */
   pending: [] as Array<{ id: string; sessionID: string; action: string; metadata?: { input?: unknown } }>,
@@ -77,6 +80,7 @@ const state = {
 let panelWindowId: number | null = null
 let chatBooted = false
 let replying = false
+const titleInFlight = new Set<string>()
 
 const scratchDir = await (async () => {
   const v = (await browser.storage.local.get("scratchDir").catch(() => ({}))) as { scratchDir?: string }
@@ -85,21 +89,26 @@ const scratchDir = await (async () => {
 
 async function loadPersisted() {
   const got = (await browser.storage.local
-    .get(["panelSettings", "panelSelect", "showAll"])
+    .get(["panelSettings", "panelSelect", "panelIds"])
     .catch(() => ({}))) as {
     panelSettings?: { providers?: string[]; favorites?: Fav[] }
     panelSelect?: { model?: string; agent?: string }
-    showAll?: boolean
+    panelIds?: string[]
   }
   state.settings.providers = got.panelSettings?.providers ?? []
   state.settings.favorites = got.panelSettings?.favorites ?? []
   state.selModel = got.panelSelect?.model ?? ""
   state.selAgent = got.panelSelect?.agent ?? ""
-  state.showAll = got.showAll ?? false
+  state.panelIds = new Set(got.panelIds ?? [])
 }
 
 async function persistSelection() {
   await browser.storage.local.set({ panelSelect: { model: state.selModel, agent: state.selAgent } } as never)
+}
+
+async function savePanelIds() {
+  // Cap the set so long-lived installs do not grow storage indefinitely.
+  await browser.storage.local.set({ panelIds: [...state.panelIds].slice(-500) } as never).catch(() => {})
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -346,11 +355,15 @@ function fmtTime(s: SessionRow): string {
 function visibleSessions(): SessionRow[] {
   const q = state.sessionQ.trim().toLowerCase()
   const list = q ? state.sessions.filter((s) => (s.title ?? "").toLowerCase().includes(q)) : state.sessions
-  return list.slice(0, state.showAll ? 200 : 30)
+  return list.slice(0, 30)
 }
 
 function renderSessions() {
   const rows = visibleSessions()
+  if (rows.length === 0) {
+    el("session-list")!.innerHTML = `<div style="color: var(--muted); font-size: 11px; padding: 8px;">No hay chats del panel todavía — ＋ nueva.</div>`
+    return
+  }
   el("session-list")!.innerHTML = rows
     .map(
       (s) => `<div class="srow" data-id="${esc(s.id)}">
@@ -359,8 +372,6 @@ function renderSessions() {
       </div>`,
     )
     .join("")
-  ;(el("toggle-all") as HTMLButtonElement).textContent = state.showAll ? "panel" : "todas"
-  ;(el("toggle-all") as HTMLButtonElement).title = state.showAll ? "solo las sesiones del panel" : "mostrar también las sesiones del CLI"
 }
 
 function toggleOverlay(which: "sessions" | "settings" | "picker", open?: boolean) {
@@ -449,8 +460,8 @@ async function loadHistory(id: string | null) {
     renderModelChip()
     renderMessages()
   } catch (err) {
-    // Older servers may not expose /message — the live view keeps working.
     if (isServerDown(err)) markServerDown(err)
+    else showError(`no se pudo cargar el historial: ${String((err as Error).message).slice(0, 120)}`)
   }
 }
 
@@ -649,10 +660,29 @@ function showError(m: string) {
 
 // ── actions ──────────────────────────────────────────────────────────────────
 
+async function maybeTitleSession(sessionId: string, raw: string): Promise<void> {
+  const row = state.sessions.find((x) => x.id === sessionId)
+  if (!row || !isDefaultPanelTitle(row.title ?? "")) return
+  if (titleInFlight.has(sessionId)) return
+  const next = panelTitleFromPrompt(raw)
+  if (next === "Panel") return
+  titleInFlight.add(sessionId)
+  try {
+    await op("patch_session", { sessionId, title: next })
+    row.title = next
+    renderSessions()
+  } catch {
+    // cosmetic only — retry on the next prompt if the server rejected it
+  } finally {
+    titleInFlight.delete(sessionId)
+  }
+}
+
 async function sendPrompt() {
   const ta = el("composer") as HTMLTextAreaElement
   const raw = ta.value.trim()
-  if (!raw || !state.activeId || state.busy) return
+  const sessionId = state.activeId
+  if (!raw || !sessionId || state.busy) return
   if (state.server !== "up") {
     if (state.server === "unknown") setServerState("down")
     return
@@ -666,13 +696,14 @@ async function sendPrompt() {
     type PageCtx = { tabId: number; url: string; title: string }
     let page: PageCtx | null = null
     try {
-      page = (await op("current_page", { sessionId: state.activeId })) as PageCtx | null
+      page = (await op("current_page", { sessionId })) as PageCtx | null
     } catch {}
     const text =
       page && /^https?:/.test(page.url)
         ? `[contexto: el usuario está viendo esta página — tabId ${page.tabId}: ${page.url}] ${raw}`
         : raw
-    await op("prompt", { sessionId: state.activeId, text })
+    await op("prompt", { sessionId, text })
+    void maybeTitleSession(sessionId, raw)
   } catch (err) {
     if (isServerDown(err)) markServerDown(err)
     else showError(String((err as Error).message))
@@ -710,6 +741,8 @@ async function newChat() {
     const created = result?.data
     if (!created?.id) throw new Error("el server rechazó la creación de la sesión")
     state.sessions.unshift({ id: created.id, title: created.title })
+    state.panelIds.add(created.id)
+    void savePanelIds()
     openChat(created.id)
     ;(el("composer") as HTMLTextAreaElement).focus()
   } catch (err) {
@@ -894,11 +927,26 @@ async function refreshOnce() {
   try {
     if (state.models.length === 0) void fillSelectors()
     if (state.sessions.length === 0 || syncTick === 0) {
-      const args = state.showAll ? undefined : { directory: scratchDir }
-      const raw = (await op("list_sessions", args)) as { data?: SessionRow[] }
-      state.sessions = (raw?.data ?? [])
-        .slice(0, state.showAll ? 200 : 30)
+      const byDir = (await op("list_sessions", { directory: scratchDir })) as { data?: SessionRow[] }
+      let rows = byDir?.data ?? []
+      if (rows.length === 0) {
+        // Some servers normalize/store the panel's location differently (e.g. a
+        // macOS home path). Fall back to the panel's own markers so the history
+        // still loads; CLI sessions never match them.
+        const all = (await op("list_sessions")) as { data?: SessionRow[] }
+        rows = (all?.data ?? []).filter((s) => isPanelSession(s, state.panelIds, scratchDir))
+      }
+      let added = false
+      for (const s of rows) {
+        if (!state.panelIds.has(s.id)) {
+          state.panelIds.add(s.id)
+          added = true
+        }
+      }
+      if (added) void savePanelIds()
+      state.sessions = rows
         .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
+        .slice(0, 30)
       renderSessions()
     }
   } catch (err) {
@@ -936,12 +984,6 @@ void (async () => {
 
   // sessions dropdown
   el("new-chat")!.addEventListener("click", () => void newChat())
-  el("toggle-all")!.addEventListener("click", () => {
-    state.showAll = !state.showAll
-    void browser.storage.local.set({ showAll: state.showAll } as never)
-    state.sessions = []
-    void refresh()
-  })
   ;(el("session-q") as HTMLInputElement).addEventListener("input", (ev) => {
     state.sessionQ = (ev.target as HTMLInputElement).value
     renderSessions()

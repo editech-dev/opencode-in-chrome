@@ -1,3 +1,5 @@
 export * from "./registry"
 export * from "./tools/catalog"
 export * from "./perm-nav"
+export * from "./panel-sessions"
+export * from "./panel-title"

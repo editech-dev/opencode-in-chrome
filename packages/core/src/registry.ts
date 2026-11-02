@@ -11,7 +11,7 @@ import type { SessionScope, ToolContent } from "@opencode-in-chrome/shared"
 export type RiskLevel = "read_only" | "mutates_page" | "sensitive"
 
 export type ToolDefinition = {
-  /** MCP-visible name; OpenCode normalizes to `oc_chrome_<name>`. */
+  /** MCP-visible name; the permission key keeps the server dash: `oc-chrome_<name>`. */
   name: string
   title: string
   description: string

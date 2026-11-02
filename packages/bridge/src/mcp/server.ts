@@ -10,8 +10,8 @@
  *     for setups that prefer one shared browser gateway.
  *
  * MCP surface (registry contract): server name IS `oc-chrome`, tool names are
- * the raw catalog names — OpenCode normalizes the tool keys to `oc_chrome_*`,
- * which is exactly what the project permission rules expect.
+ * the raw catalog names — the permission key preserves the server dash
+ * (`oc-chrome_*`), which is exactly what the project permission rules expect.
  *
  * stdout is protocol-only on stdio (Chrome's rule everywhere); logs → stderr.
  */

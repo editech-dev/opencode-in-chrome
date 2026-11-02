@@ -17,10 +17,9 @@ OpenCode (CLI or local server) ──MCP──▶ oc-chrome-bridge ──native 
 Everything runs on **your machine**: no cloud middleman, no Docker required, no scripts to run per use
 (Chrome spawns the bridge automatically; you install it once).
 
-> **Status:** `v0.1.0-alpha` — Fase 1 shipped: the extension drives your Chrome
-> (tabs, navigation, page text, full computer use) and the **MCP server is live**:
-> register it once with `oc-chrome-bridge mcp` and your OpenCode sessions get the
-> `oc_chrome_*` browser tools. Side-panel chat (Fase 3) is next.
+> **Status:** `v0.1.0-alpha` — Mode A (MCP) is live and Mode B (side-panel chat)
+> shares sessions with your CLI. The panel needs the local OpenCode background
+> service running; see [Side-panel chat](#side-panel-chat).
 > See the roadmap in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Use with OpenCode (Mode A)
@@ -31,12 +30,34 @@ bun run packages/bridge/src/cli.ts install --ext-id <extension-id-from-chrome://
 bun run packages/bridge/src/cli.ts mcp
 ```
 
-Then in any OpenCode session the agent can ask for `oc_chrome_tabs_context`,
-`oc_chrome_navigate`, `oc_chrome_get_page_text`, `oc_chrome_computer`, … and every
+Then in any OpenCode session the agent can ask for `oc-chrome_tabs_context`,
+`oc-chrome_navigate`, `oc-chrome_get_page_text`, `oc-chrome_computer`, … and every
 browser action runs in **a tab group dedicated to that session** — isolated from
 your own tabs, gone when the session ends. Gate the tools as you see fit
 (`permissions` snippet in [packages/bridge/README.md](packages/bridge/README.md);
 the permission key keeps the server dash: `oc-chrome_*`).
+
+## Side-panel chat
+
+The panel talks to the same local OpenCode background service as your CLI.
+Start it before opening the panel (or keep `opencode` running in a terminal).
+Open the panel from the extension icon on the tab you want it attached to:
+
+```sh
+opencode service status
+opencode service start   # if it is not running
+```
+
+If it is not running, the panel shows a neutral notice with this command — no
+error, and it reconnects on its own when the service comes up.
+
+If you use `opencode --standalone` or disabled the shared service
+(`opencode service set disabled true`), the panel cannot connect.
+
+The panel creates its sessions with an `oc-chrome_*` → `ask` ruleset, so the
+browser tools are gated without editing your OpenCode config. If you also use
+Mode A from the CLI and want a global gate, see the permissions snippet in
+[packages/bridge/README.md](packages/bridge/README.md).
 
 ## Requirements
 
@@ -44,7 +65,7 @@ the permission key keeps the server dash: `oc-chrome_*`).
 |---|---|
 | [Bun](https://bun.com) | ≥ 1.4 (pinned in `.bun-version`) |
 | Chrome / Chromium / Edge / Brave | MV3 (Chrome ≥ 116) |
-| OpenCode | V2, with `opencode serve` / background service |
+| OpenCode | V2, with the shared background service ([start it here](#side-panel-chat)) |
 
 ## Development
 

@@ -17,9 +17,31 @@ OpenCode (CLI o servidor local) ──MCP──▶ oc-chrome-bridge ──native
 Todo corre **en tu máquina**: sin intermediarios en la nube, sin Docker, sin scripts por uso
 (Chrome lanza el bridge automáticamente; se instala una sola vez).
 
-> **Estado:** `v0.0.1` — andamio de Fase 0 (toolchain, esqueleto MV3, spike de native messaging).
-> Las herramientas de navegador llegan en la Fase 1; la integración MCP en la Fase 2; el chat del
-> panel en la Fase 3.
+> **Estado:** `v0.1.0-alpha` — Modo A (MCP) operativo y Modo B (chat en el panel)
+> compartiendo sesiones con tu CLI. El panel necesita el servicio de fondo local
+> de OpenCode; ver [Chat del panel](#chat-del-panel).
+
+## Chat del panel
+
+El panel usa el mismo servicio de fondo local de OpenCode que tu CLI. Arráncalo
+antes de abrir el panel (o mantén `opencode` abierto en una terminal).
+Abre el panel desde el icono de la extensión en la pestaña a la que quieras atarlo:
+
+```sh
+opencode service status
+opencode service start   # si no está corriendo
+```
+
+Si no está corriendo, el panel muestra un aviso neutro con ese comando — sin
+error, y se reconecta solo cuando el servicio arranca.
+
+Si usas `opencode --standalone` o desactivaste el servicio compartido
+(`opencode service set disabled true`), el panel no puede conectarse.
+
+El panel crea sus sesiones con un ruleset `oc-chrome_*` → `ask`, así que las
+herramientas de navegador quedan gateadas sin editar tu configuración de
+OpenCode. Si también usas el Modo A desde el CLI y quieres un gate global, mira
+el snippet de permisos en [packages/bridge/README.md](packages/bridge/README.md).
 
 ## Requisitos
 
@@ -27,7 +49,7 @@ Todo corre **en tu máquina**: sin intermediarios en la nube, sin Docker, sin sc
 |---|---|
 | [Bun](https://bun.com) | ≥ 1.4 (fijado en `.bun-version`) |
 | Chrome / Chromium / Edge / Brave | MV3 (Chrome ≥ 116) |
-| OpenCode | V2, con `opencode serve` / servicio de fondo |
+| OpenCode | V2, con el servicio de fondo compartido ([cómo arrancarlo](#chat-del-panel)) |
 
 ## Desarrollo
 

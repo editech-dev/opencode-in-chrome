@@ -21,6 +21,7 @@ import {
   foreignTabError,
   isWebViewUrl,
   noGroupError,
+  shouldEnablePanel,
   urlSchemeError,
 } from "../../core/src/tab-rules"
 import { keyPressEvent } from "../../core/src/key-spec"
@@ -61,6 +62,24 @@ export default defineBackground(() => {
   const sessionGroups = new Map<string, { tabGroupId: number; windowId: number }>()
   /** windowId → the ONE OpenCode group this window hosts (panel flow — Claude parity). */
   const windowGroups = new Map<number, { tabGroupId: number; sessionId: string }>()
+  /** windowId → OpenCode group whose side panel is visible (specs/08). */
+  const panelScopeByWindow = new Map<number, { groupId: number; sessionId: string }>()
+  /** windowId → tab where the panel was opened (ephemeral; survives until SW restart). */
+  const panelHostByWindow = new Map<number, number>()
+
+  const PANEL_PATH = "sidepanel.html"
+
+  async function loadPanelScopes() {
+    const { panelScopeSnapshot } = (await browser.storage.session
+      .get("panelScopeSnapshot")
+      .catch(() => ({}))) as { panelScopeSnapshot?: Record<string, { groupId: number; sessionId: string }> }
+    for (const [k, v] of Object.entries(panelScopeSnapshot ?? {})) panelScopeByWindow.set(Number(k), v)
+  }
+
+  async function savePanelScopes() {
+    const snapshot = Object.fromEntries([...panelScopeByWindow.entries()].map(([k, v]) => [String(k), v]))
+    await browser.storage.session.set({ panelScopeSnapshot: snapshot } as never).catch(() => {})
+  }
 
   async function loadSessionGroups() {
     const { sessionGroupsSnapshot, windowGroupsSnapshot } = await browser.storage.local
@@ -96,12 +115,29 @@ export default defineBackground(() => {
   async function ensureGroup(
     sessionId: string,
     createIfEmpty: boolean,
-    opts?: { windowId?: number; adoptable?: boolean },
+    opts?: { windowId?: number; adoptable?: boolean; hostTabId?: number },
   ) {
     const entry = sessionGroups.get(sessionId)
     const alive = await liveGroupIds()
 
-    if (entry && alive.includes(entry.tabGroupId)) return entry
+    if (entry && alive.includes(entry.tabGroupId)) {
+      // The session already owns a group: if the panel was opened on another tab
+      // of the same window, move that host tab into the group so the scoped
+      // panel stays visible on its own tab (specs/08).
+      if (opts?.adoptable && opts.hostTabId !== undefined && opts.windowId === entry.windowId) {
+        const host = await browser.tabs.get(opts.hostTabId).catch(() => null)
+        if (host?.id !== undefined && host.windowId === entry.windowId && !host.pinned && host.groupId !== entry.tabGroupId) {
+          await browser.tabs.group({ tabIds: [host.id], groupId: entry.tabGroupId }).catch(() => {})
+        }
+        panelScopeByWindow.set(entry.windowId, { groupId: entry.tabGroupId, sessionId })
+        windowGroups.set(entry.windowId, { tabGroupId: entry.tabGroupId, sessionId })
+        await savePanelScopes()
+        await saveSessionGroups()
+        void syncPanelScope(entry.windowId)
+        browser.runtime.sendMessage({ kind: "panelScope", windowId: entry.windowId, sessionId }).catch(() => {})
+      }
+      return entry
+    }
 
     // T-D1 (resuelto por pedido del usuario, 17-oct): el grupo vive en la
     // ventana ACTUAL — el grupo es la frontera de aislamiento, no la ventana
@@ -203,18 +239,35 @@ export default defineBackground(() => {
     }
 
     if (reuseGroupId === undefined) {
-      // Fresh: duplicate the active tab (carries the page), group it anew.
-      const activeTab = (await browser.tabs.query({ windowId: target, active: true }).catch(() => []))[0]
-      if (activeTab?.id !== undefined) {
-        const dup = await browser.tabs.duplicate(activeTab.id).catch(() => null)
-        seedTabId = dup?.id
-        if (seedTabId !== undefined) await browser.tabs.update(seedTabId, { active: false }).catch(() => {})
+      // Panel flow: the tab where the user opened the panel is the seed — it
+      // must stay INSIDE the group or the scoping would hide the panel (specs/08).
+      if (opts?.hostTabId !== undefined) {
+        const host = await browser.tabs.get(opts.hostTabId).catch(() => null)
+        if (host?.id !== undefined && host.windowId === target && !host.pinned) seedTabId = host.id
+      }
+      if (seedTabId === undefined) {
+        // Fresh: duplicate the active tab (carries the page), group it anew.
+        const activeTab = (await browser.tabs.query({ windowId: target, active: true }).catch(() => []))[0]
+        if (activeTab?.id !== undefined) {
+          const dup = await browser.tabs.duplicate(activeTab.id).catch(() => null)
+          seedTabId = dup?.id
+          if (seedTabId !== undefined) await browser.tabs.update(seedTabId, { active: false }).catch(() => {})
+        }
       }
       if (seedTabId === undefined) {
         const made = await browser.tabs.create({ windowId: target, active: false }).catch(() => null)
         seedTabId = made?.id
       }
       if (seedTabId === undefined) throw new Error("tabs_context: chrome did not return a seed tab")
+    }
+
+    // Adoption keeps the group's survivor but still needs the panel host tab in
+    // the group, otherwise the panel would be scoped out of its own tab.
+    if (reuseGroupId !== undefined && opts?.hostTabId !== undefined) {
+      const host = await browser.tabs.get(opts.hostTabId).catch(() => null)
+      if (host?.id !== undefined && host.windowId === target && !host.pinned) {
+        await browser.tabs.group({ tabIds: [host.id], groupId: reuseGroupId }).catch(() => {})
+      }
     }
 
     if (seedTabId === undefined) throw new Error("tabs_context: no seed tab survived adoption")
@@ -227,7 +280,14 @@ export default defineBackground(() => {
     const gid = await groupId
     const fresh = { tabGroupId: gid, windowId: target }
     sessionGroups.set(sessionId, fresh)
-    if (opts?.adoptable) windowGroups.set(target, { tabGroupId: gid, sessionId })
+    if (opts?.adoptable) {
+      windowGroups.set(target, { tabGroupId: gid, sessionId })
+      panelScopeByWindow.set(target, { groupId: gid, sessionId })
+      await savePanelScopes()
+      void syncPanelScope(target)
+      // Other panel instances in the same window restore the same chat.
+      browser.runtime.sendMessage({ kind: "panelScope", windowId: target, sessionId }).catch(() => {})
+    }
     await saveSessionGroups()
     await brandGroup(gid)
     return fresh
@@ -239,6 +299,49 @@ export default defineBackground(() => {
       await browser.tabGroups.update(groupId, { color: "orange", title: "OpenCode" })
     } catch {
       // cosmetic only
+    }
+  }
+
+  // ── Side-panel scoping (specs/08) ──────────────────────────────────────────
+
+  /** Enables the panel only on tabs of the window's OpenCode group (or the host tab pre-group). */
+  async function syncPanelScope(windowId: number): Promise<void> {
+    const scope = panelScopeByWindow.get(windowId)
+    const hostTabId = panelHostByWindow.get(windowId)
+    const tabs = await browser.tabs.query({ windowId }).catch(() => [])
+    await Promise.all(
+      tabs.map((tab) => {
+        if (tab.id === undefined) return Promise.resolve()
+        const enabled = shouldEnablePanel(tab, scope, hostTabId)
+        return browser.sidePanel.setOptions({ tabId: tab.id, path: PANEL_PATH, enabled }).catch(() => {})
+      }),
+    )
+  }
+
+  async function syncPanelTab(tabId: number): Promise<void> {
+    const tab = await browser.tabs.get(tabId).catch(() => null)
+    if (!tab || tab.id === undefined) return
+    const scope = panelScopeByWindow.get(tab.windowId)
+    const hostTabId = panelHostByWindow.get(tab.windowId)
+    const enabled = shouldEnablePanel(tab, scope, hostTabId)
+    await browser.sidePanel.setOptions({ tabId: tab.id, path: PANEL_PATH, enabled }).catch(() => {})
+  }
+
+  async function initPanelScoping(): Promise<void> {
+    // No global default panel: the manifest hook removes side_panel.default_path.
+    await browser.sidePanel.setOptions({ enabled: false }).catch(() => {})
+    await browser.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {})
+    const windows = await browser.windows.getAll({ populate: true }).catch(() => [])
+    const live = new Set(windows.map((w) => w.id))
+    for (const windowId of [...panelScopeByWindow.keys()]) {
+      if (!live.has(windowId)) {
+        panelScopeByWindow.delete(windowId)
+        panelHostByWindow.delete(windowId)
+      }
+    }
+    await savePanelScopes()
+    for (const win of windows) {
+      if (win.id !== undefined) await syncPanelScope(win.id)
     }
   }
 
@@ -545,6 +648,7 @@ export default defineBackground(() => {
       if (!isWebViewUrl(url)) throw new Error(urlSchemeError(url))
       const tab = (await browser.tabs.create({ url, active: args.active !== false, windowId: entry.windowId })) as unknown as TabLike
       await browser.tabs.group({ tabIds: [tab.id], groupId: entry.tabGroupId })
+      void syncPanelTab(tab.id)
       return { tabId: tab.id, url, tabGroupId: entry.tabGroupId }
     },
 
@@ -681,7 +785,11 @@ export default defineBackground(() => {
         if (pending) {
           pendingOps.delete(msg.id)
           if (msg.ok === true) pending.resolve(msg.result)
-          else pending.reject(new Error(String(msg?.error?.message ?? "op failed")))
+          else {
+            const err = new Error(String(msg?.error?.message ?? "op failed")) as Error & { code?: string }
+            err.code = msg?.error?.code
+            pending.reject(err)
+          }
         }
         break
       }
@@ -716,7 +824,7 @@ export default defineBackground(() => {
   // Modo B (T17): the panel names operations; the host holds the credentials
   // (I4) and runs them against the local OpenCode server. Responses are
   // correlated by id; SSE events fan out to every extension page.
-  const pendingOps = new Map<string, { resolve: (r: unknown) => void; reject: (e: Error) => void }>()
+  const pendingOps = new Map<string, { resolve: (r: unknown) => void; reject: (e: Error & { code?: string }) => void }>()
   let opSeq = 0
 
   function sendOp(op: string, args?: unknown): Promise<unknown> {
@@ -750,11 +858,27 @@ export default defineBackground(() => {
         sendResponse(lastStatus)
       } else if (msg?.kind === "op" && typeof msg.op === "string") {
         // Local ops (no server, no host roundtrip): the panel's session context.
+        if (msg.op === "panel_context") {
+          const windowId = Number(msg.args?.windowId)
+          const scope = Number.isFinite(windowId) ? panelScopeByWindow.get(windowId) : undefined
+          sendResponse({ ok: true, result: scope ?? null })
+          return false
+        }
         if (msg.op === "ensure_group") {
-          void ensureGroup(String(msg.args?.sessionId ?? ""), true, {
-            windowId: sender?.tab?.windowId,
-            adoptable: true, // panel flow: one OpenCode group per window, adopt + clear
-          }).then(
+          void (async () => {
+            const requestedWindow = Number(msg.args?.windowId)
+            const windowId = Number.isFinite(requestedWindow) ? requestedWindow : sender?.tab?.windowId
+            let hostTabId = windowId !== undefined ? panelHostByWindow.get(windowId) : undefined
+            if (windowId !== undefined && hostTabId === undefined) {
+              const [active] = await browser.tabs.query({ windowId, active: true }).catch(() => [])
+              hostTabId = active?.id
+            }
+            return ensureGroup(String(msg.args?.sessionId ?? ""), true, {
+              windowId,
+              adoptable: true, // panel flow: one OpenCode group per window, adopt + clear
+              hostTabId,
+            })
+          })().then(
             (entry) => sendResponse({ ok: true, result: entry }),
             (err: Error) => sendResponse({ ok: false, error: err.message }),
           )
@@ -804,7 +928,7 @@ export default defineBackground(() => {
         }
         void sendOp(msg.op, msg.args).then(
           (result) => sendResponse({ ok: true, result }),
-          (err: Error) => sendResponse({ ok: false, error: err.message }),
+          (err: Error & { code?: string }) => sendResponse({ ok: false, error: err.message, code: err.code }),
         )
         return true // async sendResponse
       }
@@ -812,29 +936,69 @@ export default defineBackground(() => {
     },
   )
 
-  // ── Side panel scoped to the TAB it was raised on (user request, 17-oct) ──
-  // Chrome side panels are window-level by default ("el chat queda en todo").
-  // We scope per tab: open → remember the tab; switching tabs hides the panel;
-  // returning to the tab brings it back. Each page keeps its own chat instance.
-  const panelTabs = new Set<number>()
+  // ── Side panel scoped to its OpenCode tab group (specs/08) ─────────────────
+  // Removing side_panel.default_path (wxt hook) kills the global instance;
+  // enable per tab and hide it outside the window's OpenCode group.
   browser.action.onClicked.addListener((tab) => {
-    void (async () => {
-      if (tab.id === undefined) return
-      // open() FIRST — it needs the click gesture alive; options afterwards.
-      await browser.sidePanel.open({ tabId: tab.id }).catch(() => {})
-      await browser.sidePanel.setOptions({ tabId: tab.id, path: "sidepanel.html", enabled: true }).catch(() => {})
-      panelTabs.add(tab.id)
-    })()
+    if (tab.id === undefined || tab.windowId === undefined) return
+    panelHostByWindow.set(tab.windowId, tab.id)
+    // Keep the click gesture: no await between setOptions and open.
+    void browser.sidePanel.setOptions({ tabId: tab.id, path: PANEL_PATH, enabled: true }).catch(() => {})
+    void browser.sidePanel.open({ tabId: tab.id }).catch(() => {})
   })
   browser.tabs.onActivated.addListener(({ tabId }) => {
-    void browser.sidePanel.setOptions({ tabId, enabled: panelTabs.has(tabId) }).catch(() => {})
+    void syncPanelTab(tabId)
+  })
+  browser.tabs.onCreated.addListener((tab) => {
+    if (tab.id !== undefined) void syncPanelTab(tab.id)
+  })
+  browser.tabs.onUpdated.addListener((tabId, info) => {
+    if (info.groupId !== undefined) void syncPanelTab(tabId)
+  })
+  browser.tabs.onRemoved.addListener((tabId, info) => {
+    if (panelHostByWindow.get(info.windowId) === tabId) panelHostByWindow.delete(info.windowId)
+  })
+  browser.windows.onRemoved.addListener((windowId) => {
+    panelScopeByWindow.delete(windowId)
+    panelHostByWindow.delete(windowId)
+    windowGroups.delete(windowId)
+    void savePanelScopes()
+    void saveSessionGroups()
+  })
+  browser.tabGroups.onRemoved.addListener((group) => {
+    for (const [windowId, scope] of panelScopeByWindow) {
+      if (scope.groupId !== group.id) continue
+      panelScopeByWindow.delete(windowId)
+      panelHostByWindow.delete(windowId)
+      void savePanelScopes()
+      void syncPanelScope(windowId)
+      browser.runtime.sendMessage({ kind: "panelScope", windowId, sessionId: null }).catch(() => {})
+    }
+  })
+  // Chrome 141+: know which tab hosts the panel even if it was opened from the
+  // side-panel menu (no action click).
+  const sidePanelEvents = browser.sidePanel as unknown as {
+    onOpened?: { addListener(cb: (info: { tabId?: number; windowId: number }) => void): void }
+    onClosed?: { addListener(cb: (info: { tabId?: number; windowId: number }) => void): void }
+  }
+  sidePanelEvents.onOpened?.addListener((info) => {
+    if (info.tabId !== undefined) panelHostByWindow.set(info.windowId, info.tabId)
+    void syncPanelScope(info.windowId)
+  })
+  sidePanelEvents.onClosed?.addListener(() => {
+    // Keep the scope: closing the panel must not end the chat or the group.
   })
 
-  browser.runtime.onInstalled.addListener(() => connectHost())
+  browser.runtime.onInstalled.addListener(() => {
+    void initPanelScoping()
+    connectHost()
+  })
   browser.runtime.onStartup.addListener(() => connectHost())
 
   void (async () => {
     await loadSessionGroups()
     connectHost()
+    await loadPanelScopes()
+    await initPanelScoping()
   })()
 })

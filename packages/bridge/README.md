@@ -18,8 +18,8 @@ bun run src/cli.ts mcp               # registers oc-chrome with OpenCode (global
 
 ## Use with OpenCode (Modo A)
 
-The MCP layer exposes the browser as `oc_chrome_*` tools (OpenCode normalizes
-the server name + tool name). Registering:
+The MCP layer exposes the browser as `oc-chrome_*` tools (OpenCode keeps the
+server dash when building the permission key). Registering:
 
 ```sh
 oc-chrome-bridge mcp                 # → opencode mcp add oc-chrome --global -- bun run …/mcp.ts
@@ -46,6 +46,10 @@ permission key is `<server-name>_<tool>` and our server name is `oc-chrome`
 // { "action": "oc-chrome_tabs_*",   "resource": "*", "effect": "allow" },
 // { "action": "oc-chrome_get_page_text", "resource": "*", "effect": "allow" }
 ```
+
+Rules are ordered and the **last match wins**: keep broad `allow`/`ask` rules
+first and specific `deny` rules last. A later `ask` otherwise overrides an
+earlier `deny` (e.g. a `git push *` ask would defeat `git push --force*` deny).
 
 Secrets never leave the socket in the clear: every text payload crosses the
 relay through the shared `redactAll()` pass (I3) — the MCP content your model

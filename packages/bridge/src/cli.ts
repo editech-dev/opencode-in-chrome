@@ -277,7 +277,7 @@ async function cmdMcp(argv: string[]): Promise<void> {
   out("")
   out(http
     ? "⚠ HTTP mode needs the gateway running: bun run packages/bridge/src/mcp.ts --http"
-    : "✓ global — `oc_chrome_*` tools work in every project (permissions: ask per action, see README)")
+    : "✓ global — `oc-chrome_*` tools work in every project (permissions: ask per action, see README)")
   const list = await run(oc, ["mcp", "list", "--log-level", "fatal"], 10_000)
   if (list.stdout.trim()) out(`\n${list.stdout.trim()}`)
 }

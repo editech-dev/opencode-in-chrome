@@ -24,35 +24,61 @@
 import { readFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { isRecord } from "@opencode-in-chrome/shared"
+import { isRecord, type OpErrorCode } from "@opencode-in-chrome/shared"
 
 export type ServiceInfo = {
   url: string
   password: string
 }
 
-/** Resolves the live OpenCode service credentials, re-reading every time (C10). */
+/** Thrown when service.json is missing/malformed — the panel turns it into a neutral notice. */
+export class ServiceError extends Error {
+  constructor(
+    readonly code: OpErrorCode,
+    message: string,
+  ) {
+    super(message)
+    this.name = "ServiceError"
+  }
+}
+
+/**
+ * Resolves the live OpenCode service credentials, re-reading every time (C10).
+ *
+ * Only the registration file under the state dir is a credential source.
+ * `~/.config/opencode/service.json` is the service's private configuration
+ * (CORS/disabled), not a registration — reading it here was misleading and is
+ * intentionally gone (specs/07).
+ */
 export async function readServiceInfo(): Promise<ServiceInfo> {
   const state = process.env["XDG_STATE_HOME"] || join(homedir(), ".local", "state")
-  const candidates = [
-    join(state, "opencode", "service.json"),
-    join(homedir(), ".config", "opencode", "service.json"),
-  ]
-  let url = ""
-  let password = ""
-  for (const file of candidates) {
-    if (!file) continue
-    try {
-      const cfg = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>
-      url = url || (typeof cfg["url"] === "string" ? cfg["url"] : "")
-      password = password || (typeof cfg["password"] === "string" ? cfg["password"] : "")
-    } catch {
-      /* file absent/unreadable → try the next source */
-    }
-    if (url && password) break
+  const file = join(state, "opencode", "service.json")
+  let raw: string
+  try {
+    raw = await readFile(file, "utf8")
+  } catch {
+    throw new ServiceError(
+      "server_not_running",
+      "OpenCode service credentials not found — start OpenCode first (service.json missing)",
+    )
   }
-  if (!password) throw new Error("OpenCode service credentials not found — start OpenCode first (service.json missing)")
-  if (!url) throw new Error("OpenCode service url not found — start OpenCode first")
+  let cfg: Record<string, unknown>
+  try {
+    cfg = JSON.parse(raw) as Record<string, unknown>
+  } catch {
+    throw new ServiceError(
+      "server_not_running",
+      "OpenCode service registration is malformed — restart OpenCode to rewrite service.json",
+    )
+  }
+  const url = typeof cfg["url"] === "string" ? cfg["url"] : ""
+  const password = typeof cfg["password"] === "string" ? cfg["password"] : ""
+  if (!url || !password) {
+    throw new ServiceError(
+      "server_not_running",
+      "OpenCode service registration is incomplete (url/password missing) — start OpenCode first",
+    )
+  }
   return { url: url.replace(/\/$/, ""), password }
 }
 
@@ -129,11 +155,18 @@ export function opRoute(op: string, args: unknown): { path: string; method: "GET
 
 export type OpFetchResult =
   | { ok: true; result: unknown }
-  | { ok: false; error: { message: string } }
+  | { ok: false; error: { code: OpErrorCode; message: string } }
 
 /** One authenticated call to the local server; timeouts keep Chrome's pipe honest. */
 export async function opFetch(method: "GET" | "POST" | "PATCH", path: string, body?: unknown): Promise<OpFetchResult> {
-  const info = await readServiceInfo()
+  let info: ServiceInfo
+  try {
+    info = await readServiceInfo()
+  } catch (err) {
+    const e = err as Error
+    const code = err instanceof ServiceError ? err.code : "server_not_running"
+    return { ok: false, error: { code, message: e.message } }
+  }
   try {
     const res = await fetch(`${info.url}${path}`, {
       method,
@@ -144,13 +177,33 @@ export async function opFetch(method: "GET" | "POST" | "PATCH", path: string, bo
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(10_000),
     })
-    if (!res.ok) return { ok: false, error: { message: `opencode server ${res.status} ${res.statusText} — ${method} ${path}` } }
+    if (res.status === 401 || res.status === 403) {
+      return {
+        ok: false,
+        error: {
+          code: "server_auth_failed",
+          message: `opencode server rejected the session (${res.status}) — restart OpenCode to refresh service.json`,
+        },
+      }
+    }
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: {
+          code: "server_error",
+          message: `opencode server ${res.status} ${res.statusText} — ${method} ${path}`,
+        },
+      }
+    }
     if (res.status === 204) return { ok: true, result: null }
     return { ok: true, result: await res.json().catch(() => null) }
   } catch (err) {
     const e = err as Error
     const why = e.name === "TimeoutError" ? "timed out after 10 s" : e.message
-    return { ok: false, error: { message: `opencode server unreachable (${why}) — ${method} ${path}` } }
+    return {
+      ok: false,
+      error: { code: "server_unreachable", message: `opencode server unreachable (${why}) — ${method} ${path}` },
+    }
   }
 }
 

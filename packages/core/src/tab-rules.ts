@@ -48,6 +48,20 @@ export function noGroupError(tool: string): string {
   return `${tool}: no tab group for this session yet — call tabs_context with createIfEmpty:true first`
 }
 
+/**
+ * Panel visibility rule (specs/08): the side panel is enabled only on tabs of
+ * the window's OpenCode group. Before the group exists, only the tab where the
+ * user opened the panel (the host tab) is enabled.
+ */
+export function shouldEnablePanel(
+  tab: { id?: number; groupId?: number },
+  scope: { groupId: number } | undefined,
+  hostTabId?: number,
+): boolean {
+  if (scope) return tab.groupId === scope.groupId
+  return hostTabId !== undefined && tab.id === hostTabId
+}
+
 /** Deny-list reminder: schemes outside http(s) are always refused, even on allowlisted hosts. */
 export function urlSchemeError(url: string): string {
   return `navigate: scheme refused "${url}" — only http/https through agent tools`

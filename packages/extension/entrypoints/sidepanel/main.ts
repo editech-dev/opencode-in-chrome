@@ -7,17 +7,22 @@
  */
 
 import { browser } from "wxt/browser"
+import { movePermissionDecision, type PermissionDecision } from "../../../core/src/perm-nav"
 
 const el = (id: string) => document.getElementById(id)
 
 // ── op transport (names only; the host holds credentials — I4) ───────────────
 
-type OpReply = { ok: boolean; result?: unknown; error?: string }
+type OpReply = { ok: boolean; result?: unknown; error?: string; code?: string }
 
 async function op(opName: string, args?: unknown): Promise<unknown> {
   const resp = (await browser.runtime.sendMessage({ kind: "op", op: opName, args } as never)) as OpReply | undefined
   if (!resp) throw new Error(`op ${opName}: no bridge response`)
-  if (!resp.ok) throw new Error(resp.error ?? `op ${opName} failed`)
+  if (!resp.ok) {
+    const err = new Error(resp.error ?? `op ${opName} failed`) as Error & { code?: string }
+    err.code = resp.code
+    throw err
+  }
   return resp.result
 }
 
@@ -57,7 +62,21 @@ const state = {
   sessionQ: "",
   /** Pending permission asks for the ACTIVE session (permission.asked). */
   pending: [] as Array<{ id: string; sessionID: string; action: string; metadata?: { input?: unknown } }>,
+  /** Keyboard selection for the permission card: action + decision (specs/07 UX). */
+  permSel: null as { id: string; decision: PermissionDecision } | null,
+  /** Readiness of the local OpenCode server (specs/07) — independent from the bridge. */
+  server: "unknown" as "unknown" | "up" | "down",
+  serverDetail: "",
+  serverCode: "",
+  /** Native-host bridge status (connected / connecting / disconnected / host_missing). */
+  bridgeType: "connecting",
+  /** Command offered by the "Copiar comando" button for the current notice. */
+  noticeCommand: "opencode service start",
 }
+
+let panelWindowId: number | null = null
+let chatBooted = false
+let replying = false
 
 const scratchDir = await (async () => {
   const v = (await browser.storage.local.get("scratchDir").catch(() => ({}))) as { scratchDir?: string }
@@ -108,34 +127,57 @@ function listedProviders(): string[] {
   return chosen.length > 0 ? chosen : [...live]
 }
 
-// ── status → header dot ──────────────────────────────────────────────────────
+// ── status → header dot (server readiness; specs/07) ─────────────────────────
 
-function renderStatus(status: { type?: string; hostVersion?: string | null } | null) {
-  const dot = el("bridge-dot")!
-  const txt = el("bridge-txt")!
-  switch (status?.type) {
-    case "connected":
-      dot.className = "dot ok"
-      txt.textContent = "conectado"
-      break
-    case "connecting":
-      dot.className = "dot warn"
-      txt.textContent = "conectando…"
-      break
-    case "host_missing":
-      dot.className = "dot bad"
-      txt.textContent = "sin host"
-      break
-    default:
-      dot.className = "dot warn"
-      txt.textContent = "desconectado"
-  }
-  dot.title = `bridge ${status?.type ?? "desconocido"} · host ${status?.hostVersion ?? "—"}`
+const SERVER_DOWN_CODES = new Set(["server_not_running", "server_unreachable", "server_auth_failed"])
+
+function isServerDown(err: unknown): boolean {
+  const code = (err as { code?: string } | null)?.code
+  return code !== undefined && SERVER_DOWN_CODES.has(code)
 }
 
-browser.runtime.onMessage.addListener((msg: { kind?: string; status?: unknown; event?: string; properties?: unknown }) => {
+function serverCodeOf(err: unknown): string {
+  return (err as { code?: string } | null)?.code ?? ""
+}
+
+function renderHeader() {
+  const dot = el("bridge-dot")!
+  const txt = el("bridge-txt")!
+  if (state.bridgeType === "host_missing") {
+    dot.className = "dot bad"
+    txt.textContent = "sin host"
+  } else if (state.bridgeType === "disconnected") {
+    dot.className = "dot bad"
+    txt.textContent = "sin puente"
+  } else if (state.bridgeType !== "connected") {
+    dot.className = "dot warn"
+    txt.textContent = "conectando…"
+  } else if (state.server === "up") {
+    dot.className = "dot ok"
+    txt.textContent = "conectado"
+  } else if (state.server === "down") {
+    dot.className = "dot warn"
+    txt.textContent = "apagado"
+  } else {
+    dot.className = "dot warn"
+    txt.textContent = "conectando…"
+  }
+  dot.title = `bridge ${state.bridgeType} · OpenCode ${state.server}${state.serverDetail ? ` — ${state.serverDetail}` : ""}`
+}
+
+function renderStatus(status: { type?: string; hostVersion?: string | null } | null) {
+  const prev = state.bridgeType
+  state.bridgeType = status?.type ?? "connecting"
+  renderHeader()
+  if (prev !== state.bridgeType) renderView()
+}
+
+browser.runtime.onMessage.addListener((msg: { kind?: string; status?: unknown; event?: string; properties?: unknown; windowId?: number; sessionId?: string }) => {
   if (msg?.kind === "bridgeStatus") renderStatus(msg.status as never)
   if (msg?.kind === "opEvent" && typeof msg.event === "string") onOpEvent(msg.event, msg.properties)
+  if (msg?.kind === "panelScope" && panelWindowId !== null && msg.windowId === panelWindowId) {
+    if (msg.sessionId && msg.sessionId !== state.activeId) openChat(msg.sessionId)
+  }
 })
 
 // ── markdown-lite ────────────────────────────────────────────────────────────
@@ -214,14 +256,81 @@ function renderMessages() {
 /** Chat-first visibility: empty state ↔ messages, composer bar, tab strip. */
 function renderView() {
   const hasChat = state.activeId !== null
-  el("empty")!.style.display = hasChat ? "none" : ""
-  el("messages")!.style.display = hasChat ? "" : "none"
-  el("composerbox")!.style.display = hasChat ? "" : "none"
-  el("chatmeta")!.style.display = hasChat ? "flex" : "none"
+  const bridgeDown = state.bridgeType === "disconnected" || state.bridgeType === "host_missing"
+  const down = state.server === "down" || bridgeDown
+  const up = state.server === "up" && !bridgeDown
+
+  el("server-notice")!.style.display = down ? "flex" : "none"
+  if (bridgeDown) {
+    el("server-title")!.textContent = "Puente no conectado"
+    el("server-body")!.innerHTML =
+      "Abre Chrome con la extensión cargada. Si el problema sigue, reinstala el bridge con <code>oc-chrome-bridge install</code>."
+    state.noticeCommand = "oc-chrome-bridge install"
+  } else if (state.serverCode === "server_auth_failed") {
+    el("server-title")!.textContent = "OpenCode rechazó la conexión"
+    el("server-body")!.innerHTML =
+      "Reinicia OpenCode para refrescar la credencial: <code>opencode service restart</code>."
+    state.noticeCommand = "opencode service restart"
+  } else {
+    el("server-title")!.textContent = "OpenCode no está corriendo"
+    el("server-body")!.innerHTML =
+      "Abre una terminal y ejecuta <code>opencode service start</code> (o simplemente <code>opencode</code>). Esta ventana se conecta sola."
+    state.noticeCommand = "opencode service start"
+  }
+  el("server-detail")!.textContent = bridgeDown ? "" : state.serverDetail
+  el("empty")!.style.display = !down && !hasChat ? "" : "none"
+  el("messages")!.style.display = up && hasChat ? "" : "none"
+  el("composerbox")!.style.display = down || hasChat || !up ? "" : "none"
+  el("chatmeta")!.style.display = up && hasChat ? "flex" : "none"
+  const ta = el("composer") as HTMLTextAreaElement
+  ta.disabled = !up
+  ta.placeholder = bridgeDown
+    ? "Puente no conectado"
+    : down
+      ? "OpenCode apagado — inícialo en tu terminal"
+      : hasChat
+        ? "¿Cómo te puedo ayudar? (Enter envía)"
+        : "¿Cómo te puedo ayudar?"
   const s = state.sessions.find((x) => x.id === state.activeId)
-  el("composer")!.setAttribute("placeholder", hasChat ? "¿Cómo te puedo ayudar? (Enter envía)" : "¿Cómo te puedo ayudar?")
   void s
   void refreshTabStrip()
+}
+
+function setServerState(next: "unknown" | "up" | "down", detail = "", code = "") {
+  if (state.server === next && state.serverDetail === detail && state.serverCode === code) return
+  const prev = state.server
+  state.server = next
+  state.serverDetail = detail
+  state.serverCode = code
+  renderHeader()
+  renderView()
+  if (next === "up" && prev !== "up") {
+    if (state.activeId) {
+      void loadHistory(state.activeId)
+      void refreshTabStrip()
+    } else {
+      void ensureBootChat()
+    }
+  }
+}
+
+function markServerDown(err: unknown): void {
+  const detail = String((err as Error)?.message ?? err).slice(0, 240)
+  setServerState("down", detail, serverCodeOf(err))
+}
+
+async function ensureBootChat(): Promise<void> {
+  if (chatBooted || state.server !== "up") return
+  chatBooted = true
+  try {
+    const ctx = panelWindowId !== null
+      ? ((await op("panel_context", { windowId: panelWindowId })) as { sessionId?: string } | null)
+      : null
+    if (ctx?.sessionId) openChat(ctx.sessionId)
+    else void newChat()
+  } catch {
+    chatBooted = false
+  }
 }
 
 function fmtTime(s: SessionRow): string {
@@ -274,16 +383,18 @@ function openChat(id: string | null) {
   state.messages.clear()
   stream.clear()
   state.pending = []
+  state.permSel = null
   const s = state.sessions.find((x) => x.id === id)
   el("composer")!.setAttribute("data-session", id ?? "")
   // El grupo nace EN ESTA VENTANA en cuanto abres el chat (paridad Claude).
   if (id) {
-    void op("ensure_group", { sessionId: id }).then(() => void refreshTabStrip(), () => {})
+    void op("ensure_group", { sessionId: id, windowId: panelWindowId ?? undefined }).then(() => void refreshTabStrip(), () => {})
   }
   toggleOverlay("sessions", false)
   renderView()
   void loadHistory(id)
   renderMessages()
+  renderPerms()
 }
 
 function closeChat() {
@@ -337,8 +448,9 @@ async function loadHistory(id: string | null) {
     }
     renderModelChip()
     renderMessages()
-  } catch {
+  } catch (err) {
     // Older servers may not expose /message — the live view keeps working.
+    if (isServerDown(err)) markServerDown(err)
   }
 }
 
@@ -415,6 +527,7 @@ function onOpEvent(event: string, properties: unknown): void {
     case "permission.replied": {
       const id = String(p.id ?? "")
       state.pending = state.pending.filter((x) => x.id !== id)
+      if (state.permSel?.id === id) state.permSel = null
       renderPerms()
       break
     }
@@ -446,32 +559,70 @@ function onOpEvent(event: string, properties: unknown): void {
 function renderPerms() {
   const wrap = el("permwrap")!
   const mine = state.pending.filter((x) => x.sessionID === state.activeId)
+  const hadCards = wrap.childElementCount > 0
+  const active = document.activeElement as HTMLElement | null
+  const activeInPerms = active !== null && wrap.contains(active)
+
+  if (mine.length === 0) {
+    state.permSel = null
+    wrap.innerHTML = ""
+    if (hadCards && document.activeElement === document.body) (el("composer") as HTMLTextAreaElement).focus()
+    return
+  }
+  if (!state.permSel || !mine.some((x) => x.id === state.permSel!.id)) {
+    state.permSel = { id: mine[0]!.id, decision: "once" }
+  }
+  const sel = state.permSel
+  const decisions = [
+    ["once", "btn-yes", "✔ una vez"],
+    ["always", "btn-always", "★ siempre"],
+    ["reject", "btn-no", "✕ rechazar"],
+  ] as const
+
   wrap.innerHTML = mine
     .map((x) => {
       const input = x.metadata?.input ? JSON.stringify(x.metadata.input) : ""
-      return `<div class="perm-card">
+      const buttons = decisions
+        .map(([decision, cls, label]) => {
+          const chosen = sel.id === x.id && sel.decision === decision
+          return `<button class="${cls}${chosen ? " selected" : ""}" data-reply="${decision}:${esc(x.id)}" data-decision="${decision}" data-req="${esc(x.id)}">${label}</button>`
+        })
+        .join("")
+      return `<div class="perm-card" data-req="${esc(x.id)}">
         <div style="font-size:10px; color: var(--warn);">permission · el agente pide permiso</div>
         <div style="font-size:12px; margin: 2px 0;"><code>${esc(x.action)}</code>${input ? ` <span class="raw">${esc(input).slice(0, 120)}</span>` : ""}</div>
-        <div style="display:flex; gap:4px; margin-top:4px;">
-          <button class="btn-yes" data-reply="once:${esc(x.id)}">✔ una vez</button>
-          <button class="btn-always" data-reply="always:${esc(x.id)}">★ siempre</button>
-          <button class="btn-no" data-reply="reject:${esc(x.id)}">✕ rechazar</button>
-        </div>
+        <div style="display:flex; gap:4px; margin-top:4px;">${buttons}</div>
+        <div class="perm-hint">←/→ elegir · Enter confirmar</div>
       </div>`
     })
     .join("")
+
+  // Focus the default ("una vez") when the card first appears, or restore the
+  // selection after a re-render. Never steal focus from the composer mid-typing
+  // or from an open overlay (the user must see the ask before accepting it).
+  const overlayOpen = document.querySelector(".overlay.open") !== null
+  const shouldFocus = !overlayOpen && (!hadCards || active === document.body || activeInPerms)
+  if (shouldFocus) {
+    const target = wrap.querySelector<HTMLButtonElement>("button.selected") ?? wrap.querySelector("button")
+    target?.focus({ preventScroll: true })
+  }
 }
 
 async function replyPermission(decisionAndId: string): Promise<void> {
   const [decision, id] = decisionAndId.split(":")
   const ask = state.pending.find((x) => x.id === id)
-  if (!ask) return
+  if (!ask || replying) return
+  replying = true
   try {
     await op("permission_reply", { sessionId: ask.sessionID, requestId: id, decision })
     state.pending = state.pending.filter((x) => x.id !== id)
+    if (state.permSel?.id === id) state.permSel = null
     renderPerms()
+    if (document.activeElement === document.body) (el("composer") as HTMLTextAreaElement).focus()
   } catch (err) {
     showError(String((err as Error).message).slice(0, 160))
+  } finally {
+    replying = false
   }
 }
 
@@ -502,6 +653,10 @@ async function sendPrompt() {
   const ta = el("composer") as HTMLTextAreaElement
   const raw = ta.value.trim()
   if (!raw || !state.activeId || state.busy) return
+  if (state.server !== "up") {
+    if (state.server === "unknown") setServerState("down")
+    return
+  }
   renderBusy(true)
   ;(el("send") as HTMLButtonElement).disabled = true
   ta.value = ""
@@ -519,7 +674,8 @@ async function sendPrompt() {
         : raw
     await op("prompt", { sessionId: state.activeId, text })
   } catch (err) {
-    showError(String((err as Error).message))
+    if (isServerDown(err)) markServerDown(err)
+    else showError(String((err as Error).message))
     ta.value = raw
   } finally {
     renderBusy(false)
@@ -528,6 +684,10 @@ async function sendPrompt() {
 }
 
 async function newChat() {
+  if (state.server !== "up") {
+    if (state.server === "unknown") setServerState("down")
+    return
+  }
   try {
     const effective = state.selModel || (state.settings.favorites[0] ? modelKey(state.settings.favorites[0]) : "")
     const args: {
@@ -553,7 +713,13 @@ async function newChat() {
     openChat(created.id)
     ;(el("composer") as HTMLTextAreaElement).focus()
   } catch (err) {
-    showError(String((err as Error).message))
+    if (isServerDown(err)) {
+      chatBooted = false
+      markServerDown(err)
+    } else {
+      chatBooted = true
+      showError(String((err as Error).message))
+    }
   }
 }
 
@@ -696,10 +862,34 @@ async function fillSelectors() {
 }
 
 let syncTick = 0
+let refreshing = false
 
-async function refresh() {
+async function refresh(): Promise<void> {
+  if (refreshing) return
+  refreshing = true
+  try {
+    await refreshOnce()
+  } finally {
+    refreshing = false
+  }
+}
+
+async function refreshOnce() {
   const resp = (await browser.runtime.sendMessage({ kind: "getStatus" } as never).catch(() => null)) as never
   if (resp) renderStatus(resp as never)
+
+  // Server readiness first: a chat is only created when the local service answers.
+  try {
+    await op("info")
+    if (state.server !== "up") setServerState("up")
+  } catch (err) {
+    if (state.bridgeType !== "connected") return
+    if (isServerDown(err)) markServerDown(err)
+    else showError(String((err as Error).message).slice(0, 160))
+    return
+  }
+  if (state.server === "up" && !state.activeId) void ensureBootChat()
+
   syncTick = (syncTick + 1) % 5
   try {
     if (state.models.length === 0) void fillSelectors()
@@ -711,8 +901,10 @@ async function refresh() {
         .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
       renderSessions()
     }
-  } catch {
-    el("session-list")!.innerHTML = `<div style="color: var(--muted); font-size: 11px; padding: 8px;">OpenCode local no está corriendo — arranca <code>opencode</code>.</div>`
+  } catch (err) {
+    if (isServerDown(err)) markServerDown(err)
+    else showError(String((err as Error).message).slice(0, 160))
+    return
   }
   if (state.activeId && (syncTick === 1 || syncTick === 3)) void refreshTabStrip()
 }
@@ -722,12 +914,12 @@ async function refresh() {
 void (async () => {
   const saved = (await browser.storage.local.get("bridgeStatus").catch(() => ({}))) as { bridgeStatus?: unknown }
   renderStatus((saved.bridgeStatus ?? null) as never)
+  panelWindowId = (await browser.windows.getCurrent().catch(() => null))?.id ?? null
   await loadPersisted()
   renderView()
   void refresh()
-  // Al abrir el panel: chat nuevo AUTOMÁTICO (pedido 17-oct) — el grupo nace
-  // en esta ventana llevándose la página actual; el historial queda en ⟲.
-  if (!state.activeId) void newChat()
+  // Chat creation is deferred until the server answers (specs/07): refresh()
+  // calls ensureBootChat() on the down→up transition.
   setInterval(() => void refresh(), 5_000)
 
   // header
@@ -735,6 +927,12 @@ void (async () => {
   el("recent-btn")!.addEventListener("click", () => toggleOverlay("sessions"))
   el("settings-btn")!.addEventListener("click", () => toggleOverlay("settings"))
   el("settings-close")!.addEventListener("click", () => toggleOverlay("settings", false))
+
+  // server-down notice (neutral, not an error)
+  el("server-retry")!.addEventListener("click", () => void refresh())
+  el("server-copy")!.addEventListener("click", () => {
+    void navigator.clipboard.writeText(state.noticeCommand).catch(() => {})
+  })
 
   // sessions dropdown
   el("new-chat")!.addEventListener("click", () => void newChat())
@@ -773,6 +971,48 @@ void (async () => {
     const t = (ev.target as HTMLElement).closest("[data-reply]") as HTMLElement | null
     if (t?.dataset.reply) void replyPermission(t.dataset.reply)
   })
+  // Keyboard: ←/→ picks the decision, Enter confirms (default = una vez).
+  el("permwrap")!.addEventListener("keydown", (ev) => {
+    if (!state.permSel) return
+    if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight") return
+    const req = (ev.target as HTMLElement | null)?.closest<HTMLElement>(".perm-card")?.dataset.req
+    if (req && state.permSel.id !== req) state.permSel = { id: req, decision: "once" }
+    ev.preventDefault()
+    ev.stopPropagation()
+    const next = movePermissionDecision(state.permSel.decision, ev.key)
+    state.permSel = { ...state.permSel, decision: next }
+    renderPerms()
+  })
+  // Tab/click on a button makes it the selected decision (so Enter from the
+  // composer confirms what the user is actually looking at).
+  el("permwrap")!.addEventListener("focusin", (ev) => {
+    const btn = (ev.target as HTMLElement | null)?.closest<HTMLButtonElement>("button[data-decision]")
+    if (!btn || !state.permSel) return
+    const req = btn.closest<HTMLElement>(".perm-card")?.dataset.req
+    const decision = btn.dataset.decision as PermissionDecision | undefined
+    if (!req || !decision) return
+    if (state.permSel.id === req && state.permSel.decision === decision) return
+    state.permSel = { id: req, decision }
+    for (const b of el("permwrap")!.querySelectorAll<HTMLButtonElement>("button")) {
+      b.classList.toggle("selected", b === btn)
+    }
+  })
+  // Enter while the composer/body has focus accepts the selected permission.
+  // Capture phase: it must win over the composer's Enter-to-send handler.
+  document.addEventListener(
+    "keydown",
+    (ev) => {
+      if (!state.permSel) return
+      if (ev.key !== "Enter" || ev.shiftKey || ev.metaKey || ev.ctrlKey || ev.altKey) return
+      const target = ev.target as HTMLElement | null
+      if (target?.closest("#permwrap")) return // native button activation
+      if (target?.id !== "composer" && target !== document.body) return
+      ev.preventDefault()
+      ev.stopPropagation()
+      void replyPermission(`${state.permSel.decision}:${state.permSel.id}`)
+    },
+    true,
+  )
   el("messages")!.addEventListener("click", (ev) => {
     const t = (ev.target as HTMLElement).closest("[data-retry]") as HTMLElement | null
     if (t?.dataset.retry) {

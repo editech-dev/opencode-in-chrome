@@ -99,6 +99,19 @@
       .errline { color: var(--bad); font-size: 11px; margin-top: 4px; }
       .btn-retry { background: #2b1318; border-color: var(--bad); color: var(--bad); font-size: 11px; margin-top: 6px; }
 
+      /* server-down notice — neutral, not an error (specs/07) */
+      #server-notice {
+        display: none; flex: 1; flex-direction: column; justify-content: center;
+        gap: 6px; padding: 0 18px; color: var(--muted); font-size: 12px;
+      }
+      #server-notice .sn-title { color: var(--text); font-size: 14px; font-weight: 500; }
+      #server-notice code {
+        background: var(--surface2); color: var(--text); border-radius: 4px;
+        padding: 1px 5px; font-family: ui-monospace, "Cascadia Code", Menlo, monospace;
+      }
+      #server-notice .sn-detail { font-size: 10px; opacity: 0.75; word-break: break-word; }
+      #server-notice .sn-actions { display: flex; gap: 6px; margin-top: 6px; }
+
       /* empty state — the Gemini center mark */
       #empty {
         flex: 1; display: flex; flex-direction: column; align-items: center;
@@ -147,6 +160,14 @@
       .btn-yes { border-color: var(--ok); color: var(--ok); font-size: 11px; }
       .btn-always { border-color: var(--accent); color: var(--accent); font-size: 11px; }
       .btn-no { border-color: var(--bad); color: var(--bad); font-size: 11px; }
+      .perm-card button.selected,
+      .perm-card button:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+        border-color: var(--accent);
+        color: var(--text);
+      }
+      .perm-hint { color: var(--muted); font-size: 10px; margin-top: 5px; }
       #err { color: var(--bad); font-size: 11px; padding: 0 16px 4px; min-height: 14px; }
 
       /* overlays — Recent-tasks style dropdowns */
@@ -194,6 +215,19 @@
       <button class="iconbtn" id="recent-btn" title="sesiones recientes">⟲</button>
       <button class="iconbtn" id="settings-btn" title="providers & favoritos">⚙</button>
     </header>
+
+    <div id="server-notice">
+      <div class="sn-title" id="server-title">OpenCode no está corriendo</div>
+      <div id="server-body">
+        Abre una terminal y ejecuta <code>opencode service start</code>
+        (o simplemente <code>opencode</code>). Esta ventana se conecta sola.
+      </div>
+      <div class="sn-detail" id="server-detail"></div>
+      <div class="sn-actions">
+        <button id="server-retry" class="primary">Reintentar</button>
+        <button id="server-copy">Copiar comando</button>
+      </div>
+    </div>
 
     <div class="overlay" id="sessions">
       <div class="ohead">

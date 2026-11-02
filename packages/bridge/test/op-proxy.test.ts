@@ -14,7 +14,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { encodeFrame, FrameReader } from "@opencode-in-chrome/shared"
-import { authHeader, opRoute, parseSseFrame, readServiceInfo } from "../src/native-host/op-proxy"
+import { authHeader, opFetch, opRoute, parseSseFrame, readServiceInfo } from "../src/native-host/op-proxy"
 
 const HOST_TS = join(fileURLToPath(import.meta.url), "..", "..", "src", "native-host", "host.ts")
 const children: ChildProcess[] = []
@@ -64,8 +64,105 @@ describe("op-proxy unit", () => {
     const prev = process.env["XDG_STATE_HOME"]
     process.env["XDG_STATE_HOME"] = dir
     try {
-      expect(readServiceInfo()).rejects.toThrow("start OpenCode")
+      await expect(readServiceInfo()).rejects.toThrow("start OpenCode")
+      let code = ""
+      await readServiceInfo().catch((err: { code?: string }) => {
+        code = err.code ?? ""
+      })
+      expect(code).toBe("server_not_running")
     } finally {
+      if (prev === undefined) delete process.env["XDG_STATE_HOME"]
+      else process.env["XDG_STATE_HOME"] = prev
+    }
+  })
+
+  test("readServiceInfo rejects an incomplete registration", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocic-op-bad-"))
+    tempDirs.push(dir)
+    mkdirSync(join(dir, "opencode"), { recursive: true })
+    writeFileSync(join(dir, "opencode", "service.json"), JSON.stringify({ url: "http://127.0.0.1:1" }))
+    const prev = process.env["XDG_STATE_HOME"]
+    process.env["XDG_STATE_HOME"] = dir
+    try {
+      let code = ""
+      await readServiceInfo().catch((err: { code?: string }) => {
+        code = err.code ?? ""
+      })
+      expect(code).toBe("server_not_running")
+    } finally {
+      if (prev === undefined) delete process.env["XDG_STATE_HOME"]
+      else process.env["XDG_STATE_HOME"] = prev
+    }
+  })
+
+  test("readServiceInfo rejects a malformed JSON registration", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocic-op-json-"))
+    tempDirs.push(dir)
+    mkdirSync(join(dir, "opencode"), { recursive: true })
+    writeFileSync(join(dir, "opencode", "service.json"), "{not json")
+    const prev = process.env["XDG_STATE_HOME"]
+    process.env["XDG_STATE_HOME"] = dir
+    try {
+      let message = ""
+      await readServiceInfo().catch((err: Error) => {
+        message = err.message
+      })
+      expect(message).toContain("malformed")
+    } finally {
+      if (prev === undefined) delete process.env["XDG_STATE_HOME"]
+      else process.env["XDG_STATE_HOME"] = prev
+    }
+  })
+
+  test("opFetch maps missing service / 401 / unreachable to typed codes", async () => {
+    const prev = process.env["XDG_STATE_HOME"]
+
+    const empty = mkdtempSync(join(tmpdir(), "ocic-op-missing-"))
+    tempDirs.push(empty)
+    process.env["XDG_STATE_HOME"] = empty
+    try {
+      const missing = await opFetch("GET", "/api/info")
+      expect(missing.ok).toBe(false)
+      if (!missing.ok) expect(missing.error.code).toBe("server_not_running")
+    } finally {
+      if (prev === undefined) delete process.env["XDG_STATE_HOME"]
+      else process.env["XDG_STATE_HOME"] = prev
+    }
+
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req) {
+        const path = new URL(req.url).pathname
+        return new Response("x", { status: path === "/auth" ? 401 : 500 })
+      },
+    })
+    const dir = mkdtempSync(join(tmpdir(), "ocic-op-codes-"))
+    tempDirs.push(dir)
+    mkdirSync(join(dir, "opencode"), { recursive: true })
+    writeFileSync(
+      join(dir, "opencode", "service.json"),
+      JSON.stringify({ url: `http://127.0.0.1:${server.port}`, password: "pw" }),
+    )
+    process.env["XDG_STATE_HOME"] = dir
+    try {
+      const auth = await opFetch("GET", "/auth")
+      expect(auth.ok).toBe(false)
+      if (!auth.ok) expect(auth.error.code).toBe("server_auth_failed")
+
+      const bad = await opFetch("GET", "/bad")
+      expect(bad.ok).toBe(false)
+      if (!bad.ok) expect(bad.error.code).toBe("server_error")
+
+      writeFileSync(
+        join(dir, "opencode", "service.json"),
+        JSON.stringify({ url: "http://127.0.0.1:1", password: "pw" }),
+      )
+      const down = await opFetch("GET", "/api/info")
+      expect(down.ok).toBe(false)
+      if (!down.ok) expect(down.error.code).toBe("server_unreachable")
+    } finally {
+      server.stop(true)
       if (prev === undefined) delete process.env["XDG_STATE_HOME"]
       else process.env["XDG_STATE_HOME"] = prev
     }
@@ -142,6 +239,54 @@ describe("host op proxy (integration)", () => {
       push: async (s: string) => ssePush?.(s),
     }
   }
+
+  test("host returns a typed server_not_running when service.json is absent", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "ocic-op-down-"))
+    tempDirs.push(stateDir)
+    const child = spawn(process.execPath, ["run", HOST_TS], {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, XDG_STATE_HOME: stateDir },
+    })
+    children.push(child)
+    const reader = new FrameReader()
+    const frames: Array<Record<string, unknown>> = []
+    let notify: (() => void) | null = null
+    child.stdout?.on("data", (d: Buffer) => {
+      for (const f of reader.push(d)) {
+        frames.push(f as Record<string, unknown>)
+        notify?.()
+      }
+    })
+    const next = (want: string) =>
+      new Promise<Record<string, unknown>>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`timeout waiting ${want}`)), 9000)
+        const pump = () => {
+          const idx = frames.findIndex((f) => f["type"] === want)
+          if (idx >= 0) {
+            const hit = frames.splice(idx, 1)[0] as Record<string, unknown>
+            clearTimeout(timer)
+            resolve(hit)
+            return
+          }
+          notify = pump
+        }
+        pump()
+      })
+    const send = (msg: unknown) => child.stdin?.write(encodeFrame(msg))
+
+    send({ type: "ping" })
+    await next("pong")
+    send({ type: "op_request", id: "down-1", op: "info" })
+    const resp = (await next("op_response")) as {
+      id?: string
+      ok?: boolean
+      error?: { code?: string; message?: string }
+    }
+    expect(resp.id).toBe("down-1")
+    expect(resp.ok).toBe(false)
+    expect(resp.error?.code).toBe("server_not_running")
+    child.stdin?.end()
+  }, 20_000)
 
   test("op_request → op_response through the real host process (auth + envelope)", async () => {
     const mock = await startMockServer()

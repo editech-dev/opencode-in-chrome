@@ -3,6 +3,24 @@
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- Side panel now distinguishes the native bridge from the local OpenCode service: when the
+  service is down it shows a neutral notice with `opencode service start`, disables the composer,
+  and reconnects within 5 s without creating an empty session.
+- Side panel is scoped to its OpenCode tab group: removed `side_panel.default_path` (global
+  panel), per-tab enable/disable, the host tab joins the group, and the chat is restored per
+  window.
+
+### Changed
+- Docs: the permission key is `oc-chrome_*` (server dash preserved), and rule ordering is
+  documented (`last match wins`; denies last).
+
+### Added
+- Keyboard support for permission cards: Enter accepts "once", ←/→ selects
+  "always"/"reject", Enter confirms; visible shortcut hint.
+
 ## [0.0.1] — 2026-10-13
 
 ### Added

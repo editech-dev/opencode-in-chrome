@@ -92,6 +92,9 @@ export type OpRequestMsg = {
   args?: unknown
 }
 
+/** Typed server-readiness failures (specs/07). */
+export type OpErrorCode = "server_not_running" | "server_unreachable" | "server_auth_failed" | "server_error"
+
 export type OpResponseMsg = {
   type: "op_response"
   id: string
@@ -101,7 +104,7 @@ export type OpResponseMsg = {
   type: "op_response"
   id: string
   ok: false
-  error: { message: string }
+  error: { code?: OpErrorCode; message: string }
 }
 
 /** One parsed GET /api/event frame, broadcast while the SSE pipe is open. */

@@ -5,6 +5,7 @@ import {
   noGroupError,
   pickLiveEntry,
   foreignTabError,
+  shouldEnablePanel,
   urlSchemeError,
   type ScopeGroupEntry,
 } from "../src/tab-rules"
@@ -39,6 +40,21 @@ describe("pickLiveEntry", () => {
   test("drops stale entries (group closed by user)", () => {
     expect(pickLiveEntry(entry, [43])).toBe(false)
     expect(pickLiveEntry(undefined, [42])).toBe(false)
+  })
+})
+
+describe("shouldEnablePanel", () => {
+  test("inside the OpenCode group → enabled", () => {
+    expect(shouldEnablePanel({ id: 1, groupId: 42 }, { groupId: 42 })).toBe(true)
+  })
+  test("outside the group → disabled (the bug: panel must not follow the user)", () => {
+    expect(shouldEnablePanel({ id: 2, groupId: 43 }, { groupId: 42 })).toBe(false)
+    expect(shouldEnablePanel({ id: 3, groupId: -1 }, { groupId: 42 })).toBe(false)
+  })
+  test("before the group exists, only the host tab is enabled", () => {
+    expect(shouldEnablePanel({ id: 7 }, undefined, 7)).toBe(true)
+    expect(shouldEnablePanel({ id: 8 }, undefined, 7)).toBe(false)
+    expect(shouldEnablePanel({ id: 7 }, undefined)).toBe(false)
   })
 })
 

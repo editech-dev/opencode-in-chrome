@@ -3,6 +3,7 @@
   "description": "Dependency policy (D4): never propose a version younger than 24 hours.",
   "extends": ["config:recommended"],
   "minimumReleaseAge": "1 day",
+  "osvVulnerabilityAlerts": true,
   "timezone": "UTC",
   "schedule": ["before 6am on monday"],
   "vulnerabilityAlerts": {
@@ -18,6 +19,11 @@
       "matchManagers": ["bun"],
       "matchUpdateTypes": ["minor", "patch"],
       "groupName": "bun minor+patch"
+    },
+    {
+      "description": "Pin GitHub Actions to immutable commit SHAs",
+      "matchManagers": ["github-actions"],
+      "pinDigests": true
     }
   ]
 }

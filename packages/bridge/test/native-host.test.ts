@@ -130,11 +130,13 @@ describe("native host handshake (Chrome protocol)", () => {
       nativeHostVersion?: string
       socketPath?: string
       mcpClients?: number
+      defaultScratchDir?: string
     }
     expect(msg.type).toBe("status_response")
     expect(typeof msg.nativeHostVersion).toBe("string")
     expect(msg.socketPath).toContain("oc-chrome")
     expect(msg.mcpClients).toBe(0)
+    expect(msg.defaultScratchDir).toMatch(/opencode-chrome$/)
   })
 
   test("socket client: tool_request with no extension → typed error with correlation id", async () => {

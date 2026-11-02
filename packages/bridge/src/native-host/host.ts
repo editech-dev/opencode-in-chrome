@@ -15,6 +15,8 @@
 
 import { createServer, connect, type Server, type Socket } from "node:net"
 import { appendFile, chmod, mkdir, readdir, rm } from "node:fs/promises"
+import { homedir } from "node:os"
+import { join } from "node:path"
 import { stdin, stdout, pid } from "node:process"
 import {
   FrameReader,
@@ -34,6 +36,8 @@ import {
 import { opFetch, opRoute, parseSseFrame, readServiceInfo, authHeader } from "./op-proxy"
 
 export const NATIVE_HOST_VERSION = PROTOCOL_VERSION + ".0"
+/** Stable project directory for panel-created sessions (no user-specific hardcoding). */
+const DEFAULT_SCRATCH_DIR = join(homedir(), "opencode-chrome")
 
 function log(msg: string): void {
   process.stderr.write(`[oc-chrome-host ${pid}] ${msg}\n`)
@@ -154,6 +158,7 @@ export class NativeHost {
           socketPath: this.socketPath,
           mcpClients: this.clients.size,
           extensionConnected: this.extensionConnected,
+          defaultScratchDir: DEFAULT_SCRATCH_DIR,
         })
         break
       case "tool_response": {

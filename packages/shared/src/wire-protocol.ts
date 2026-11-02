@@ -33,6 +33,8 @@ export type StatusResponseMsg = {
   socketPath: string
   mcpClients: number
   extensionConnected: boolean
+  /** Portable panel scratch directory, derived from the host's home directory. */
+  defaultScratchDir: string
 }
 
 // ── Host ↔ extension lifecycle broadcasts ────────────────────────────────────

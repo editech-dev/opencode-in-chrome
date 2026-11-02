@@ -82,10 +82,12 @@ let chatBooted = false
 let replying = false
 const titleInFlight = new Set<string>()
 
-const scratchDir = await (async () => {
+let scratchDir = await (async () => {
   const v = (await browser.storage.local.get("scratchDir").catch(() => ({}))) as { scratchDir?: string }
-  return v.scratchDir ?? "/home/edison/opencode-chrome"
+  return v.scratchDir ?? ""
 })()
+/** A user-configured directory wins over the bridge default. */
+const scratchDirFromStorage = scratchDir !== ""
 
 async function loadPersisted() {
   const got = (await browser.storage.local
@@ -174,9 +176,12 @@ function renderHeader() {
   dot.title = `bridge ${state.bridgeType} · OpenCode ${state.server}${state.serverDetail ? ` — ${state.serverDetail}` : ""}`
 }
 
-function renderStatus(status: { type?: string; hostVersion?: string | null } | null) {
+function renderStatus(status: { type?: string; hostVersion?: string | null; scratchDir?: string } | null) {
   const prev = state.bridgeType
   state.bridgeType = status?.type ?? "connecting"
+  if (!scratchDirFromStorage && typeof status?.scratchDir === "string" && status.scratchDir) {
+    scratchDir = status.scratchDir
+  }
   renderHeader()
   if (prev !== state.bridgeType) renderView()
 }
@@ -717,6 +722,10 @@ async function sendPrompt() {
 async function newChat() {
   if (state.server !== "up") {
     if (state.server === "unknown") setServerState("down")
+    return
+  }
+  if (!scratchDir) {
+    showError("bridge desconectado: no se pudo resolver el directorio del panel")
     return
   }
   try {

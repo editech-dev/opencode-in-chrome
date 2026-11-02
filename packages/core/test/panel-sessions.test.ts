@@ -15,12 +15,12 @@ describe("isPanelSession", () => {
     expect(isPanelSession({ id: "ses_6" }, new Set())).toBe(false)
   })
   test("accepts a per-session location matching scratchDir (trailing slash tolerated)", () => {
-    const scratch = "/home/edison/opencode-chrome"
+    const scratch = "/tmp/oc-scratch"
     expect(
       isPanelSession({ id: "ses_7", title: "renamed elsewhere", location: { directory: `${scratch}/` } }, new Set(), scratch),
     ).toBe(true)
     expect(
-      isPanelSession({ id: "ses_8", title: "cli", location: { directory: "/srv/other" } }, new Set(), scratch),
+      isPanelSession({ id: "ses_8", title: "cli", location: { directory: "/tmp/other" } }, new Set(), scratch),
     ).toBe(false)
   })
 })

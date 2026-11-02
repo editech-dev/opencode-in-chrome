@@ -183,8 +183,8 @@ describe("op-proxy unit", () => {
   })
 
   test("list_sessions filters by directory when asked (panel scratch view)", () => {
-    const scoped = opRoute("list_sessions", { directory: "/home/edison/opencode-chrome" }) as { path: string }
-    expect(scoped.path).toBe("/api/session?directory=%2Fhome%2Fedison%2Fopencode-chrome")
+    const scoped = opRoute("list_sessions", { directory: "/tmp/oc scratch" }) as { path: string }
+    expect(scoped.path).toBe("/api/session?directory=%2Ftmp%2Foc%20scratch")
     const all = opRoute("list_sessions", {}) as { path: string }
     expect(all.path).toBe("/api/session")
   })

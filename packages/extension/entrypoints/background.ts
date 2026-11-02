@@ -56,6 +56,7 @@ export default defineBackground(() => {
     hostVersion: null as string | null,
     mcpClients: 0,
     extensionConnected: false,
+    scratchDir: "",
   }
 
   /** sessionId → { tabGroupId, windowId } */
@@ -761,6 +762,7 @@ export default defineBackground(() => {
           hostVersion: msg.nativeHostVersion,
           mcpClients: msg.mcpClients,
           extensionConnected: msg.extensionConnected,
+          scratchDir: typeof msg.defaultScratchDir === "string" ? msg.defaultScratchDir : "",
         } as never)
         break
       case "mcp_connected":

@@ -45,6 +45,7 @@ jobs:
         continue-on-error: true # non-blocking during Fase 0; make blocking at Fase 1
 
       - name: Assert lockfile stayed frozen
+        shell: bash
         run: |
           if [ -n "$(git status --porcelain bun.lock)" ]; then
             echo "::error::bun.lock changed during install — commit the updated lockfile or fix the manifest"

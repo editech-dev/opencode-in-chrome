@@ -5,6 +5,7 @@ import { defineConfig } from "wxt"
 // La clave PRIVADA vive fuera del repo (~/.config/oc-chrome/ext-key.pem, chmod 600);
 // si se pierde, se genera una nueva y hay que re-emparejar con oc-chrome-bridge install.
 export default defineConfig({
+  zip: { name: "opencode-in-chrome" },
   manifest: {
     name: "OpenCode in Chrome",
     description:
@@ -18,8 +19,11 @@ export default defineConfig({
     // WXT auto-adds side_panel.default_path for the `sidepanel` entrypoint.
     // A default_path creates a GLOBAL panel that follows the user across tabs;
     // we need tab-specific panels (specs/08), so strip it from the manifest.
-    "build:manifestGenerated": (_wxt, manifest) => {
+    "build:manifestGenerated": (wxt, manifest) => {
       delete (manifest as { side_panel?: unknown }).side_panel
+      // The store assigns its own key/ID on first upload; a manifest `key`
+      // pins the ID for unpacked development only and can be rejected there.
+      if (wxt.config.mode === "store") delete (manifest as { key?: unknown }).key
     },
   },
 })

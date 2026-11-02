@@ -1,9 +1,18 @@
 {
   "name": "opencode-in-chrome",
-  "version": "0.0.1",
+  "version": "0.1.0-alpha",
   "private": true,
   "description": "Your local OpenCode agent, living inside Chrome — side-panel chat + browser tools over MCP.",
   "license": "MIT",
+  "author": "editech-dev (https://github.com/editech-dev)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/editech-dev/opencode-in-chrome.git"
+  },
+  "homepage": "https://github.com/editech-dev/opencode-in-chrome#readme",
+  "bugs": {
+    "url": "https://github.com/editech-dev/opencode-in-chrome/issues"
+  },
   "type": "module",
   "workspaces": [
     "packages/*"
@@ -15,7 +24,8 @@
     "test": "bun test",
     "typecheck": "bun check",
     "check:dep-age": "bun scripts/check-dep-age.ts",
-    "build:ext": "bun run --cwd packages/extension build"
+    "build:ext": "bun run --cwd packages/extension build",
+    "build:store": "bun run --cwd packages/extension build:store"
   },
   "devDependencies": {
     "@types/bun": "1.4.3"

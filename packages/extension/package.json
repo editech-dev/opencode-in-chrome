@@ -1,13 +1,20 @@
 {
   "name": "@opencode-in-chrome/extension",
-  "version": "0.0.1",
+  "version": "0.1.0-alpha",
   "private": true,
   "description": "Chrome MV3 extension: OpenCode chat side panel + browser tool dispatcher.",
   "license": "MIT",
+  "author": "editech-dev (https://github.com/editech-dev)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/editech-dev/opencode-in-chrome.git",
+    "directory": "packages/extension"
+  },
   "trustedDependencies": [],
   "scripts": {
     "dev": "wxt",
-    "build": "wxt build"
+    "build": "wxt build",
+    "build:store": "wxt zip --mode store"
   },
   "devDependencies": {
     "wxt": "0.21.4"

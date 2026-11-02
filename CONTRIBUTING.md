@@ -14,9 +14,11 @@ Thanks for helping build opencode-in-chrome. Short rules, strictly enforced:
 
 ## Stack & workflow
 
-- **Bun ≥ 1.4** (`bun install`, `bun test`, `bun run typecheck`). Do not add Node-only tooling.
-- **Dependency policy:** no package version younger than **24 h** (CI enforces it). No
-  lifecycle/postinstall scripts (`trustedDependencies: []`) — if a package truly needs one,
+- **Bun ≥ 1.4.4** (`bun install`, `bun test`, `bun run typecheck`). Do not add Node-only tooling.
+- **Dependency policy:** no package version younger than **24 h**. Enforced at install time
+  by Bun's `minimumReleaseAge`, in CI by `bun run check:dep-age` (every resolved version)
+  and by a blocking `bun audit`. No lifecycle/postinstall scripts
+  (`trustedDependencies: []`, `ignoreScripts = true`) — if a package truly needs one,
   justify it in a one-line ADR before adding it to the trust list.
 - **Store builds:** `bun run build:store` produces the Chrome Web Store ZIP (no development
   `key`). Never upload the `build:ext` output; it is for unpacked development only.

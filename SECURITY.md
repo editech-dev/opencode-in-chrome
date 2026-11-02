@@ -5,6 +5,10 @@
 Security fixes land on the latest `0.1.x` alpha release. Older prereleases are
 not supported.
 
+Runtime baseline: **Bun ≥ 1.4.4**. Bun 1.4.3 and earlier are affected by three
+high-severity advisories fixed in 1.4.4 (brotli decoder, bundled trust store and
+HTTP/3). See CONTRIBUTING.md for the dependency policy.
+
 ## Reporting a vulnerability
 
 **Do not open a public issue for security problems.**

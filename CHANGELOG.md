@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Security
+- Bump the Bun runtime to 1.4.4, which fixes three high-severity advisories:
+  brotli decoder out-of-bounds write (GHSA-663w-cv8g-jj2p), compromised eMudhra
+  intermediate CAs in the bundled trust store (GHSA-26q8-h657-pf84) and HTTP/3
+  QPACK amplification (GHSA-cf8x-9m69-3gg3).
+- Enforce the 24 h dependency-age policy at install time with Bun's native
+  `minimumReleaseAge`, and make `bun audit` blocking in CI.
+
 ## [0.1.0-alpha] — 2026-11-02
 
 ### Fixed

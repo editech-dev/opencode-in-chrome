@@ -135,7 +135,7 @@ See [PRIVACY.md](PRIVACY.md) for the full policy.
 
 | | Version |
 |---|---|
-| [Bun](https://bun.com) | ≥ 1.4 (pinned in `.bun-version`) |
+| [Bun](https://bun.com) | ≥ 1.4.4 (pinned in `.bun-version`) |
 | Chrome / Chromium / Edge / Brave | MV3 (Chrome ≥ 116) |
 | OpenCode | V2, with the shared background service ([start it here](#side-panel-chat)) |
 

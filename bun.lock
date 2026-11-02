@@ -10,7 +10,7 @@
     },
     "packages/bridge": {
       "name": "oc-chrome-bridge",
-      "version": "0.1.0-alpha",
+      "version": "0.1.1-alpha",
       "bin": {
         "oc-chrome-bridge": "./src/cli.ts",
       },
@@ -21,21 +21,21 @@
     },
     "packages/core": {
       "name": "@opencode-in-chrome/core",
-      "version": "0.1.0-alpha",
+      "version": "0.1.1-alpha",
       "dependencies": {
         "@opencode-in-chrome/shared": "workspace:*",
       },
     },
     "packages/extension": {
       "name": "@opencode-in-chrome/extension",
-      "version": "0.1.0-alpha",
+      "version": "0.1.1-alpha",
       "devDependencies": {
         "wxt": "0.21.5",
       },
     },
     "packages/shared": {
       "name": "@opencode-in-chrome/shared",
-      "version": "0.1.0-alpha",
+      "version": "0.1.1-alpha",
     },
   },
   "trustedDependencies": [],

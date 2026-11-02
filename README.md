@@ -20,7 +20,7 @@ OpenCode (CLI or local server) ──MCP──▶ oc-chrome-bridge ──native 
 Everything runs on **your machine**: no cloud middleman, no Docker required, no scripts to run per use
 (Chrome spawns the bridge automatically; you install it once).
 
-> **Status:** `v0.1.0-alpha` — Mode A (MCP) is live and Mode B (side-panel chat)
+> **Status:** `v0.1.1-alpha` — Mode A (MCP) is live and Mode B (side-panel chat)
 > shares sessions with your CLI. The panel needs the local OpenCode background
 > service running; see [Side-panel chat](#side-panel-chat).
 > See [CHANGELOG.md](CHANGELOG.md) for what changed.

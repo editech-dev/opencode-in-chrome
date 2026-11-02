@@ -1,6 +1,6 @@
 {
   "name": "@opencode-in-chrome/core",
-  "version": "0.1.0-alpha",
+  "version": "0.1.1-alpha",
   "private": true,
   "description": "Browser tool catalog: one file per tool (spec, implementation, test).",
   "license": "MIT",

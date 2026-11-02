@@ -1,6 +1,6 @@
 {
   "name": "oc-chrome-bridge",
-  "version": "0.1.0-alpha",
+  "version": "0.1.1-alpha",
   "description": "Native messaging host + MCP server that connects OpenCode to your Chrome.",
   "license": "MIT",
   "author": "editech-dev (https://github.com/editech-dev)",

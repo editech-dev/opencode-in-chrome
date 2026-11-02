@@ -1,8 +1,25 @@
 {
   "name": "oc-chrome-bridge",
-  "version": "0.0.1",
+  "version": "0.1.0-alpha",
   "description": "Native messaging host + MCP server that connects OpenCode to your Chrome.",
   "license": "MIT",
+  "author": "editech-dev (https://github.com/editech-dev)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/editech-dev/opencode-in-chrome.git",
+    "directory": "packages/bridge"
+  },
+  "homepage": "https://github.com/editech-dev/opencode-in-chrome/tree/main/packages/bridge#readme",
+  "bugs": {
+    "url": "https://github.com/editech-dev/opencode-in-chrome/issues"
+  },
+  "keywords": [
+    "opencode",
+    "chrome",
+    "mcp",
+    "browser-automation",
+    "native-messaging"
+  ],
   "type": "module",
   "trustedDependencies": [],
   "bin": {

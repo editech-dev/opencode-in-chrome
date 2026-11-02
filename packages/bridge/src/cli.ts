@@ -26,7 +26,7 @@ import {
   socketPathForPid,
 } from "@opencode-in-chrome/shared"
 
-const VERSION = "0.0.1"
+const VERSION = "0.1.0-alpha"
 const HERE = dirname(fileURLToPath(import.meta.url))
 const HOST_TS = join(HERE, "native-host", "host.ts")
 

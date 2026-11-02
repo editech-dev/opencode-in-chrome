@@ -18,6 +18,8 @@ Thanks for helping build opencode-in-chrome. Short rules, strictly enforced:
 - **Dependency policy:** no package version younger than **24 h** (CI enforces it). No
   lifecycle/postinstall scripts (`trustedDependencies: []`) — if a package truly needs one,
   justify it in a one-line ADR before adding it to the trust list.
+- **Store builds:** `bun run build:store` produces the Chrome Web Store ZIP (no development
+  `key`). Never upload the `build:ext` output; it is for unpacked development only.
 - Work happens in feature branches (`feat/…`, `fix/…`) and PRs; `main` is protected.
 
 ## Project layout

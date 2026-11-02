@@ -1,9 +1,15 @@
 {
   "name": "@opencode-in-chrome/core",
-  "version": "0.0.1",
+  "version": "0.1.0-alpha",
   "private": true,
   "description": "Browser tool catalog: one file per tool (spec, implementation, test).",
   "license": "MIT",
+  "author": "editech-dev (https://github.com/editech-dev)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/editech-dev/opencode-in-chrome.git",
+    "directory": "packages/core"
+  },
   "type": "module",
   "trustedDependencies": [],
   "dependencies": {

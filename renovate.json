@@ -3,7 +3,7 @@
   "description": "Dependency policy (D4): never propose a version younger than 24 hours.",
   "extends": ["config:recommended"],
   "minimumReleaseAge": "1 day",
-  "timezone": "America/Bogota",
+  "timezone": "UTC",
   "schedule": ["before 6am on monday"],
   "vulnerabilityAlerts": {
     "enabled": true

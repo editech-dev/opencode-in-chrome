@@ -24,7 +24,7 @@ import { isRecord } from "@opencode-in-chrome/shared"
 import { HostRelay, type ToolResult } from "./relay"
 
 const SERVER_NAME = "oc-chrome"
-const SERVER_VERSION = "0.1.0"
+const SERVER_VERSION = "0.1.0-alpha"
 /** Newest protocol we can answer; we echo back whatever the client requests if it is older. */
 const MAX_PROTOCOL_VERSION = "2025-06-18"
 

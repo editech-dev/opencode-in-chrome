@@ -2,26 +2,32 @@
 
 ## Supported versions
 
-Only the latest release tag receives security fixes.
+Security fixes land on the latest `0.1.x` alpha release. Older prereleases are
+not supported.
 
 ## Reporting a vulnerability
 
 **Do not open a public issue for security problems.**
 
-Email: edisonisaza@gmail.com (include "opencode-in-chrome" in the subject). You will get an
-acknowledgement within 7 days and a fix or a mitigation plan within 30 days for accepted reports.
+Preferred: use GitHub private vulnerability reporting:
+
+<https://github.com/editech-dev/opencode-in-chrome/security/advisories/new>
+
+You can also email edisonisaza@gmail.com with `opencode-in-chrome` in the
+subject. You will get an acknowledgement within 7 days and a fix or mitigation
+plan within 30 days for accepted reports.
 
 ## Scope
 
 In scope:
 
 - `packages/bridge` — native messaging host, local socket/pipe server, MCP server, OpenCode proxy.
-- `packages/extension` — service worker dispatcher, side panel, content scripts, options page.
+- `packages/extension` — service worker dispatcher, side panel, options page.
 - `packages/shared` — wire protocol, redaction logic.
-- `infra/installer` and the `oc-chrome-bridge` CLI (`install`, `uninstall`, `doctor`).
+- The `oc-chrome-bridge` CLI (`install`, `uninstall`, `status`, `doctor`, `mcp`).
 
-Out of scope: OpenCode itself, Bun runtime, Chrome, third-party MCP servers, this repository's
-static content.
+Out of scope: OpenCode itself, Bun runtime, Chrome, third-party MCP servers, this
+repository's static content.
 
 ## Key invariants we treat as vulnerabilities if broken
 

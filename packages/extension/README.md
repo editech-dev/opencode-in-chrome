@@ -21,12 +21,14 @@ bun run --cwd packages/extension dev   # live-reload para desarrollo
 bun run packages/bridge/src/cli.ts install --ext-id <the-extension-id>
 ```
 
-`install` unions every `--ext-id` flag with previously saved ids — loading a
-rebuilt unpacked extension changes its ID (hash of the folder path), and the
-manifest keeps serving the old pairing until you decide otherwise. Then hit
-**↻** in the side panel (or wait ≤30 s for the keep-alive alarm): the panel
+`install` unions every `--ext-id` flag with previously saved ids. The manifest
+`key` pins the ID for unpacked builds, so rebuilding does not change it. Then
+hit **↻** in the side panel (or wait ≤30 s for the keep-alive alarm): the panel
 shows `Bridge (native host): connected`. Chrome spawns the host automatically
 from now on — you never run it by hand.
+
+For Chrome Web Store uploads use `bun run build:store` instead of `build`. It
+produces a ZIP without the development `key`; the store assigns its own ID.
 
 ## Files
 

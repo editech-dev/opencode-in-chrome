@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [0.1.0-alpha] — 2026-11-02
+
 ### Fixed
 - Side panel now distinguishes the native bridge from the local OpenCode service: when the
   service is down it shows a neutral notice with `opencode service start`, disables the composer,
@@ -20,10 +22,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 ### Changed
 - Docs: the permission key is `oc-chrome_*` (server dash preserved), and rule ordering is
   documented (`last match wins`; denies last).
+- Publication metadata now points at `github.com/editech-dev/opencode-in-chrome`; the README
+  gained a real quickstart, permission/privacy tables and model credits.
 
 ### Added
 - Keyboard support for permission cards: Enter accepts "once", ←/→ selects
   "always"/"reject", Enter confirms; visible shortcut hint.
+- `bun run build:store`: a Chrome Web Store ZIP that strips the development `key` (the store
+  assigns its own ID) while `build:ext` keeps the pinned ID for unpacked development.
+- Portable panel scratch directory: the native host derives `~/opencode-chrome` from the
+  current user instead of a hardcoded path.
+- `PRIVACY.md` and `STORE.md` for store review and data-use disclosure.
 
 ## [0.0.1] — 2026-10-13
 

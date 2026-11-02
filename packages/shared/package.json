@@ -1,9 +1,15 @@
 {
   "name": "@opencode-in-chrome/shared",
-  "version": "0.0.1",
+  "version": "0.1.0-alpha",
   "private": true,
   "description": "Wire protocol, types and redaction utilities shared by extension, bridge and core tools.",
   "license": "MIT",
+  "author": "editech-dev (https://github.com/editech-dev)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/editech-dev/opencode-in-chrome.git",
+    "directory": "packages/shared"
+  },
   "type": "module",
   "trustedDependencies": [],
   "exports": {

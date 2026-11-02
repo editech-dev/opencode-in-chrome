@@ -14,12 +14,14 @@
     "url": "https://github.com/editech-dev/opencode-in-chrome/issues"
   },
   "type": "module",
+  "packageManager": "bun@1.4.4",
   "workspaces": [
     "packages/*"
   ],
   "engines": {
-    "bun": ">=1.4.0"
+    "bun": ">=1.4.4"
   },
+  "trustedDependencies": [],
   "scripts": {
     "test": "bun test",
     "typecheck": "bun check",
@@ -28,6 +30,6 @@
     "build:store": "bun run --cwd packages/extension build:store"
   },
   "devDependencies": {
-    "@types/bun": "1.4.3"
+    "@types/bun": "1.4.4"
   }
 }

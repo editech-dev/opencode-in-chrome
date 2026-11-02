@@ -2,42 +2,70 @@
  * check-dep-age.ts — supply-chain gate (decision D4)
  *
  * Fails if any dependency version resolved in bun.lock was published less than
- * MIN_AGE_MS ago on the npm registry. Covers manual `bun add` (Renovate's
- * minimumReleaseAge covers scheduled updates).
+ * MIN_AGE_MS ago on the npm registry. This complements Bun's install-time
+ * `minimumReleaseAge` gate: it also catches lockfile changes made with an older
+ * Bun, with `--minimum-release-age=0`, or merged without re-resolving.
+ *
+ * Every resolved name@version is checked, including when the same package name
+ * appears with several versions (bun.lock nests those under keys like
+ * "htmlparser2/domhandler"). The lockfile is located by walking up from the
+ * current directory, so the gate also works when invoked from a workspace.
  *
  * Escape hatch (documented deviations only):
  *   OC_SKIP_DEP_AGE_CHECK=1 bun run check:dep-age
  *
- * Node/Bun compatible: only node:fs, node:process and global fetch.
+ * Node/Bun compatible: only node:fs, node:path, node:process and global fetch.
  */
 
-import { readFileSync } from "node:fs"
-import { join } from "node:path"
+import { existsSync, readFileSync } from "node:fs"
+import { dirname, join } from "node:path"
 
-const MIN_AGE_MS = 24 * 60 * 60 * 1000 // 24 hours
+export const MIN_AGE_MS = 24 * 60 * 60 * 1000 // 24 hours
 const REGISTRY = "https://registry.npmjs.org"
+
+export type ResolvedPackage = { name: string; version: string }
 
 function fail(msg: string): never {
   console.error(`✗ ${msg}`)
   process.exit(1)
 }
 
-function extractResolvedPackages(lockText: string): Map<string, string> {
+export function extractResolvedPackages(lockText: string): ResolvedPackage[] {
   // bun.lock is JSONC with entries shaped "name": ["name@version", ...] (v2) or
-  // "name": "name@version" (v1). A targeted regex handles both without a parser dep.
-  const resolved = new Map<string, string>()
+  // "name": "name@version" (v1). The version string itself is the source of
+  // truth, so nested keys for duplicate versions are handled naturally.
+  const seen = new Set<string>()
+  const resolved: ResolvedPackage[] = []
   const re = /"([a-zA-Z0-9@/_.-]+)@(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)*)"/g
   let m: RegExpExecArray | null
   while ((m = re.exec(lockText)) !== null) {
     const name = m[1]
     const version = m[2]
     if (name === undefined || version === undefined) continue
-    if (!resolved.has(name)) resolved.set(name, version)
+    const key = `${name}@${version}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    resolved.push({ name, version })
   }
   return resolved
 }
 
-async function publishedAt(name: string, version: string): Promise<number | null> {
+export function isTooFresh(publishedAtMs: number, nowMs = Date.now()): boolean {
+  return nowMs - publishedAtMs < MIN_AGE_MS
+}
+
+export function findLockfile(startDir: string): string | null {
+  let dir = startDir
+  for (;;) {
+    const candidate = join(dir, "bun.lock")
+    if (existsSync(candidate)) return candidate
+    const parent = dirname(dir)
+    if (parent === dir) return null
+    dir = parent
+  }
+}
+
+export async function publishedAt(name: string, version: string): Promise<number | null> {
   const url = `${REGISTRY}/${encodeURIComponent(name).replace("%40", "@")}`
   // Full packument (plain JSON) — the abbreviated install-v1 format omits `time`.
   const res = await fetch(url, { headers: { accept: "application/json" } })
@@ -45,62 +73,75 @@ async function publishedAt(name: string, version: string): Promise<number | null
   const doc: unknown = await res.json()
   const time = (doc as { time?: Record<string, string> }).time
   const stamp = time?.[version]
-  return stamp ? Date.parse(stamp) : null
+  if (!stamp) return null
+  const parsed = Date.parse(stamp)
+  return Number.isNaN(parsed) ? null : parsed
 }
 
-const skip = process.env.OC_SKIP_DEP_AGE_CHECK === "1"
-if (skip) {
-  console.log("check-dep-age: skipped via OC_SKIP_DEP_AGE_CHECK=1 (documented deviation required)")
-  process.exit(0)
-}
+async function main(): Promise<void> {
+  const skip = process.env.OC_SKIP_DEP_AGE_CHECK === "1"
+  if (skip) {
+    console.log("check-dep-age: skipped via OC_SKIP_DEP_AGE_CHECK=1 (documented deviation required)")
+    return
+  }
 
-const lockPath = join(process.cwd(), "bun.lock")
-let lockText: string
-try {
-  lockText = readFileSync(lockPath, "utf8")
-} catch {
-  console.log("check-dep-age: no bun.lock — nothing to check")
-  process.exit(0)
-}
+  const lockPath = findLockfile(process.cwd())
+  if (lockPath === null) {
+    fail("no bun.lock found in this directory or its parents — run the gate from the repository")
+  }
 
-const resolved = extractResolvedPackages(lockText)
-if (resolved.size === 0) {
-  console.log("check-dep-age: no resolved packages in bun.lock")
-  process.exit(0)
-}
-
-console.log(`check-dep-age: checking ${resolved.size} package(s) against a 24h minimum age…`)
-
-const tooFresh: string[] = []
-const unknown: string[] = []
-
-const entries = [...resolved.entries()]
-for (const [name, version] of entries) {
-  let stamp: number | null = null
+  let lockText: string
   try {
-    stamp = await publishedAt(name, version)
+    lockText = readFileSync(lockPath, "utf8")
   } catch (err) {
-    console.error(`  ! registry lookup failed for ${name}@${version}: ${(err as Error).message}`)
-    unknown.push(`${name}@${version}`)
-    continue
+    fail(`could not read ${lockPath}: ${(err as Error).message}`)
   }
-  if (stamp === null) {
-    unknown.push(`${name}@${version}`)
-    continue
+
+  const resolved = extractResolvedPackages(lockText)
+  if (resolved.length === 0) {
+    fail(`no resolved packages found in ${lockPath}`)
   }
-  const ageH = Math.floor((Date.now() - stamp) / 3_600_000)
-  if (Date.now() - stamp < MIN_AGE_MS) {
-    tooFresh.push(`${name}@${version} (published ${ageH}h ago)`)
-  } else {
-    console.log(`  ✓ ${name}@${version} (${ageH}h old)`)
+
+  console.log(
+    `check-dep-age: checking ${resolved.length} package version(s) against a 24h minimum age…`,
+  )
+
+  const tooFresh: string[] = []
+  const unknown: string[] = []
+
+  for (const { name, version } of resolved) {
+    let stamp: number | null = null
+    try {
+      stamp = await publishedAt(name, version)
+    } catch (err) {
+      console.error(`  ! registry lookup failed for ${name}@${version}: ${(err as Error).message}`)
+      unknown.push(`${name}@${version}`)
+      continue
+    }
+    if (stamp === null) {
+      unknown.push(`${name}@${version}`)
+      continue
+    }
+    const ageH = Math.floor((Date.now() - stamp) / 3_600_000)
+    if (isTooFresh(stamp)) {
+      tooFresh.push(`${name}@${version} (published ${ageH}h ago)`)
+    } else {
+      console.log(`  ✓ ${name}@${version} (${ageH}h old)`)
+    }
   }
+
+  if (unknown.length > 0) {
+    fail(
+      `could not verify publish date for: ${unknown.join(", ")} — resolve manually or pin an older version`,
+    )
+  }
+  if (tooFresh.length > 0) {
+    fail(`versions younger than 24h are blocked by policy:\n  - ${tooFresh.join("\n  - ")}`)
+  }
+
+  console.log("check-dep-age: ✓ all dependencies are at least 24h old")
 }
 
-if (unknown.length > 0) {
-  fail(`could not verify publish date for: ${unknown.join(", ")} — resolve manually or pin an older version`)
+if (import.meta.main) {
+  await main()
 }
-if (tooFresh.length > 0) {
-  fail(`versions younger than 24h are blocked by policy:\n  - ${tooFresh.join("\n  - ")}`)
-}
-
-console.log("check-dep-age: ✓ all dependencies are at least 24h old")

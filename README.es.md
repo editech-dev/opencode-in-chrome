@@ -135,7 +135,7 @@ Ver [PRIVACY.md](PRIVACY.md) para la política completa.
 
 | | Versión |
 |---|---|
-| [Bun](https://bun.com) | ≥ 1.4 (fijado en `.bun-version`) |
+| [Bun](https://bun.com) | ≥ 1.4.4 (fijado en `.bun-version`) |
 | Chrome / Chromium / Edge / Brave | MV3 (Chrome ≥ 116) |
 | OpenCode | V2, con el servicio de fondo compartido ([cómo arrancarlo](#chat-del-panel)) |
 

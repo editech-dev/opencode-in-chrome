@@ -44,5 +44,5 @@ produces a ZIP without the development `key`; the store assigns its own ID.
 - The host name constant must match `HOST_NAME` in the bridge (`com.opencodeinchrome.bridge`).
 - `bun run build:ext` inlines `@opencode-in-chrome/shared` (redaction) and
   `core` (tab rules, key specs) — the extension ships no runtime deps.
-- The build runs the workspace-pinned `wxt` (0.21.4) — never `bunx wxt@latest`
+- The build runs the workspace-pinned `wxt` (0.21.5) — never `bunx wxt@latest`
   (unpinned latest violates the supply-chain policy D4).

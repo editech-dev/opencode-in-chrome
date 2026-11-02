@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC — weekly vulnerability re-check
 
 permissions:
   contents: read
@@ -16,17 +18,18 @@ concurrency:
 jobs:
   ci:
     name: ${{ matrix.os }}
+    if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: "1.4.3"
+          bun-version-file: ".bun-version"
 
       - name: Install (frozen lockfile)
         run: bun install --frozen-lockfile
@@ -42,7 +45,6 @@ jobs:
 
       - name: Security audit
         run: bun audit
-        continue-on-error: true # non-blocking during Fase 0; make blocking at Fase 1
 
       - name: Assert lockfile stayed frozen
         shell: bash
@@ -51,3 +53,23 @@ jobs:
             echo "::error::bun.lock changed during install — commit the updated lockfile or fix the manifest"
             exit 1
           fi
+
+  security:
+    name: security-audit
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: ".bun-version"
+
+      - name: Install (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Dependency age gate (>= 24h)
+        run: bun run check:dep-age
+
+      - name: Security audit
+        run: bun audit

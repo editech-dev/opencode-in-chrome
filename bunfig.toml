@@ -7,6 +7,13 @@
 
 [install]
 exact = true
+# Supply-chain policy (decision D4): Bun refuses to resolve a version published
+# less than 24 hours ago. This is the install-time enforcement; the
+# check-dep-age script re-verifies the committed lockfile in CI.
+minimumReleaseAge = "1d"
+# Belt-and-suspenders with trustedDependencies: []: dependency lifecycle
+# scripts never run, regardless of Bun's default allow list.
+ignoreScripts = true
 
 [install.lockfile]
 # Text lockfile (bun.lock, v2) — readable, reviewable in PRs.
